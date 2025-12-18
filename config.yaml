@@ -1,0 +1,17 @@
+server:
+  port: ":3000"
+  app_name: "hhwtrade"
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "format"
+  dbname: "systradex.com"
+  sslmode: "disable"
+  timezone: "Asia/Shanghai"
+
+redis:
+  addr: "localhost:6379"
+  password: "format"
+  db: 0

@@ -1,0 +1,56 @@
+package config
+
+import (
+	"log"
+	"strings"
+
+	"github.com/spf13/viper"
+)
+
+type Config struct {
+	Server   ServerConfig
+	Database DatabaseConfig
+	Redis    RedisConfig
+}
+
+type ServerConfig struct {
+	Port    string
+	AppName string `mapstructure:"app_name"`
+}
+
+type DatabaseConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
+	TimeZone string
+}
+
+type RedisConfig struct {
+	Addr     string
+	Password string
+	DB       int
+}
+
+func LoadConfig() *Config {
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")        // Look for config in current directory
+	viper.AddConfigPath("./config") // Look for config in config directory
+
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Printf("Warning: Error reading config file, %s", err)
+	}
+
+	var config Config
+	if err := viper.Unmarshal(&config); err != nil {
+		log.Fatalf("Unable to decode into struct, %v", err)
+	}
+
+	return &config
+}
