@@ -139,24 +139,24 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 	switch resp.Type {
 	case "RTN_ORDER":
 		// Order Status Update
-		// Payload example: {"status": "filled", "error_msg": ""}
+		// Payload: {"status": "accepted", "order_sys_id": "12345", "error_msg": ""}
 		statusStr, _ := payload["status"].(string)
-		errorMsg, _ := payload["error_msg"].(string) // Optional
+		orderSysID, _ := payload["order_sys_id"].(string)
+		errorMsg, _ := payload["error_msg"].(string)
 
 		updates := map[string]interface{}{}
 		if statusStr != "" {
 			updates["status"] = statusStr
+		}
+		if orderSysID != "" {
+			updates["order_sys_id"] = orderSysID
 		}
 		if errorMsg != "" {
 			updates["error_msg"] = errorMsg
 		}
 
 		if len(updates) > 0 {
-			// Update by RequestID (which is unique)
-			// In production, matching by RequestID might be tricky if CTP doesn't return it perfectly.
-			// Ideally using OrderRef or OrderSysID is better.
 			if err := db.Model(&model.Order{}).Where("request_id = ?", resp.RequestID).Updates(updates).Error; err == nil {
-				// Push update to WebSocket User
 				var order model.Order
 				if db.Where("request_id = ?", resp.RequestID).First(&order).Error == nil {
 					e.websocketHub.PushToUser(order.UserID, resp)
@@ -166,21 +166,34 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 
 	case "RTN_TRADE":
 		// Trade Execution (Deal)
-		// Payload example: {"price": 3500, "volume": 1, "trade_id": "...", "direction": "buy", "offset": "open"}
+		// Payload: {"price": 3500, "volume": 1, "trade_id": "T1", "direction": "buy", "offset": "open"}
 
-		// 1. Mark order as Filled (or Partial)
 		var order model.Order
 		if err := db.Where("request_id = ?", resp.RequestID).First(&order).Error; err == nil {
-			db.Model(&order).Update("status", model.OrderStatusFilled)
+			// 1. Partial Fill Logic
+			tradeVol, _ := payload["volume"].(float64) // Redis may send as float
+			newFilledVol := order.FilledVolume + int(tradeVol)
 
-			// 2. Update Position table (Simple logic)
+			updates := map[string]interface{}{
+				"filled_volume": newFilledVol,
+			}
+
+			if newFilledVol >= order.Volume {
+				updates["status"] = model.OrderStatusFilled
+			} else {
+				// Some exchanges use status codes for partial fill
+				updates["status"] = "partial"
+			}
+
+			db.Model(&order).Updates(updates)
+
+			// 2. Update Position
 			e.updatePosition(order, payload)
 
-			// 3. Push update to WebSocket User
+			// 3. Notify user
 			e.websocketHub.PushToUser(order.UserID, resp)
 		}
-
-		log.Printf("Trade executed for RequestID %s. Position updated.", resp.RequestID)
+		log.Printf("Trade for %s: Volume %v", resp.RequestID, payload["volume"])
 
 	case "ERR_ORDER":
 		// Immediate Rejection

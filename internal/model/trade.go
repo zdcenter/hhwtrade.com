@@ -50,6 +50,10 @@ type Order struct {
 	Status    OrderStatus `gorm:"index" json:"status"`
 	RequestID string      `gorm:"uniqueIndex" json:"request_id"` // Unique ID for matching with CTP response
 
+	// Exchange Info
+	OrderSysID   string `gorm:"index" json:"order_sys_id"` // ID given by Exchange (Required for cancellation)
+	FilledVolume int    `json:"filled_volume"`             // Accumulated filled volume
+
 	// Source Info
 	StrategyID *uint `gorm:"index" json:"strategy_id"` // null for manual orders
 
