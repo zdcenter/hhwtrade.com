@@ -80,7 +80,7 @@ func (e *Executor) LoadActiveStrategies() {
 }
 
 // OnMarketData 当收到行情数据时被 Engine 调用
-func (e *Executor) OnMarketData(symbol string, price float64) []*infra.TradeCommand {
+func (e *Executor) OnMarketData(symbol string, price float64) []*infra.Command {
 	e.mu.RLock()
 	runners, ok := e.runners[symbol]
 	e.mu.RUnlock()
@@ -89,7 +89,7 @@ func (e *Executor) OnMarketData(symbol string, price float64) []*infra.TradeComm
 		return nil
 	}
 
-	var commands []*infra.TradeCommand
+	var commands []*infra.Command
 
 	// 遍历所有关注该 Symbol 的策略
 	// 并发安全注意：如果 Runner 内部状态复杂，这里可能需要加锁或单独通过 channel 通信
@@ -109,4 +109,16 @@ func (e *Executor) OnMarketData(symbol string, price float64) []*infra.TradeComm
 func (e *Executor) Reload() {
 	log.Println("Reloading strategies...")
 	e.LoadActiveStrategies()
+}
+
+// GetSymbols returns all symbols currently monitored by strategies.
+func (e *Executor) GetSymbols() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	symbols := make([]string, 0, len(e.runners))
+	for sym := range e.runners {
+		symbols = append(symbols, sym)
+	}
+	return symbols
 }

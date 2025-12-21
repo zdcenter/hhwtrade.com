@@ -2,25 +2,27 @@ package infra
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// MarketMessage wraps the topic and the data payload.
+// MarketMessage is used for internal routing between Redis and WebSocket/Engine.
 type MarketMessage struct {
-	Symbol  string `json:"symbol"`
-	Payload string `json:"payload"`
+	Symbol  string          `json:"-"`       // Internal routing key (e.g. "rb2605")
+	Payload json.RawMessage `json:"payload"` // Raw CTP JSON data
 }
 
 // MarketDataChan is now a channel of MarketMessage.
-var MarketDataChan = make(chan MarketMessage, 1000)
+var MarketDataChan = make(chan MarketMessage, 10000)
 
 // StartMarketDataSubscriber starts a goroutine to subscribe to market data.
 func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 	// Subscribe to all channels matching pattern
-	pubsub := rdb.PSubscribe(ctx, "market.*")
+	pattern := PubCtpMarketDataPrefix + "*"
+	pubsub := rdb.PSubscribe(ctx, pattern)
 
 	// Wait for confirmation that subscription is created
 	_, err := pubsub.Receive(ctx)
@@ -34,13 +36,19 @@ func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 		defer pubsub.Close()
 		log.Println("Started Market Data Subscriber Loop")
 		for msg := range ch {
-			// Strip "market." prefix to get the actual symbol
-			symbol := strings.TrimPrefix(msg.Channel, "market.")
+			// Skip empty payloads which cause JSON marshaling errors later
+			payload := strings.TrimSpace(msg.Payload)
+			if payload == "" {
+				continue
+			}
+
+			// Strip prefix to get the actual symbol
+			symbol := strings.TrimPrefix(msg.Channel, PubCtpMarketDataPrefix)
 
 			// Forward payload to internal channel non-blocking
 			message := MarketMessage{
 				Symbol:  symbol,
-				Payload: msg.Payload,
+				Payload: json.RawMessage(payload),
 			}
 
 			select {
@@ -48,6 +56,37 @@ func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 				// Data sent
 			default:
 				log.Println("Warning: MarketDataChan is full, dropping message")
+			}
+		}
+	}()
+}
+
+// StartQueryReplySubscriber starts a goroutine to listen for query responses from CTP.
+func StartQueryReplySubscriber(rdb *redis.Client, ctx context.Context) {
+	pubsub := rdb.Subscribe(ctx, PubCtpQueryReplyChan)
+
+	ch := pubsub.Channel()
+
+	go func() {
+		defer pubsub.Close()
+		log.Println("Started Query Reply Subscriber Loop")
+		for msg := range ch {
+			payload := strings.TrimSpace(msg.Payload)
+			if payload == "" {
+				continue
+			}
+
+			// Manual query responses don't have a symbol context in the channel name,
+			// but they follow the same MarketMessage structure for engine processing.
+			message := MarketMessage{
+				Symbol:  "", // Not used for query routing to WS subscribers
+				Payload: json.RawMessage(payload),
+			}
+
+			select {
+			case MarketDataChan <- message:
+			default:
+				log.Println("Warning: MarketDataChan is full, dropping query reply")
 			}
 		}
 	}()

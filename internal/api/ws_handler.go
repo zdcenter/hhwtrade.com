@@ -11,7 +11,7 @@ import (
 )
 
 type WsRequest struct {
-	Type   string `json:"type"`   // "subscribe", "unsubscribe"
+	Action string `json:"action"`   // "subscribe", "unsubscribe"
 	Symbol string `json:"symbol"` // rb2601, "AAPL", "MSFT"
 }
 
@@ -35,12 +35,21 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 		userID := c.Query("userID")
 		log.Println("New WS connection, userID:", userID)
 
+		// Track which symbols this connection has subscribed to for cleanup
+		localSubs := make(map[string]bool)
+
 		// 1. Register new connection with UserID
 		wsManager.Register <- infra.UserConnection{Conn: c, UserID: userID}
 
 		// 2. Cleanup on exit
 		defer func() {
 			wsManager.Unregister <- infra.UserConnection{Conn: c, UserID: userID}
+			// Engine cleanup: Unsubscribe from all symbols this connection was watching
+			for symbol := range localSubs {
+				if err := eng.UnsubscribeSymbol(symbol); err != nil {
+					log.Printf("WS Cleanup: Failed to unsubscribe %s: %v", symbol, err)
+				}
+			}
 			c.Close()
 		}()
 
@@ -53,6 +62,11 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 					for _, sub := range subs {
 						log.Printf("Auto-subscribing %s to %s", userID, sub.Symbol)
 						wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: sub.Symbol}
+						// Mark for local tracking and trigger Engine subscription
+						localSubs[sub.Symbol] = true
+						if err := eng.SubscribeSymbol(sub.Symbol); err != nil {
+							log.Printf("WS Auto-sub: Failed to trigger CTP subscription for %s: %v", sub.Symbol, err)
+						}
 					}
 				} else {
 					log.Printf("Failed to fetch subscriptions for user %s: %v", userID, err)
@@ -75,24 +89,31 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 			}
 
 			// Handle Actions
-			// 使用 tagged switch 来处理 msg.Type
-			switch msg.Type {
+			switch msg.Action {
 			case "subscribe":
-				// 处理订阅逻辑
+				// Handle logical subscription
 				wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: msg.Symbol}
-
-				// 可选：通知引擎进行订阅（例如订阅 Redis）
-				// eng.GetSubscriptionState().AddSubscription(msg.Topic)
-				// 如果引擎没有监听 Redis，则应订阅。当前 StartMarketDataSubscriber 已经订阅了 "market.*"。
-				// 所以暂时不需要动态的 Redis 订阅。
+				// Track locally and trigger engine
+				if !localSubs[msg.Symbol] {
+					localSubs[msg.Symbol] = true
+					if err := eng.SubscribeSymbol(msg.Symbol); err != nil {
+						log.Printf("WS: Failed to trigger CTP subscription for %s: %v", msg.Symbol, err)
+					}
+				}
 
 			case "unsubscribe":
-				// 处理取消订阅逻辑
+				// Handle logical unsubscription
 				wsManager.Unsubscribe <- infra.Subscription{Conn: c, Symbol: msg.Symbol}
+				// Remove from local tracking and trigger engine
+				if localSubs[msg.Symbol] {
+					delete(localSubs, msg.Symbol)
+					if err := eng.UnsubscribeSymbol(msg.Symbol); err != nil {
+						log.Printf("WS: Failed to trigger CTP unsubscription for %s: %v", msg.Symbol, err)
+					}
+				}
 
 			default:
-				// 处理未知类型的情况
-				log.Println("Unexpected type:", msg.Type)
+				log.Println("Unexpected type:", msg.Action)
 			}
 		}
 	}))

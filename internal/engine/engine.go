@@ -55,36 +55,40 @@ func (e *Engine) Start(ctx context.Context) {
 	// 1. Load Strategies into Memory
 	e.stratExec.LoadActiveStrategies()
 
+	// 1.1 Trigger CTP Subscriptions for Active Strategies
+	// This ensures we get data even if no UI user is watching
+	for _, sym := range e.stratExec.GetSymbols() {
+		log.Printf("Engine: Subscribing to %s for active strategies", sym)
+		e.SubscribeSymbol(sym)
+	}
+
 	// 2. Start WebSocket Manager
 	go e.websocketHub.Start()
 
-	// 3. Start Market Data Subscriber (Redis Pub/Sub -> infra.MarketDataChan)
+	// 3. Start Market Data & Query Subscriber (Redis Pub/Sub)
 	infra.StartMarketDataSubscriber(e.rdb, ctx)
+	infra.StartQueryReplySubscriber(e.rdb, ctx)
 
-	// 4. Start Event Loop to consume Market Data
+	// 4. Start Event Loop
 	go func() {
 		log.Println("Engine Event Loop Started")
 		for msg := range infra.MarketDataChan {
-			// A. Broadcast to WebSocket Users
-			e.websocketHub.Broadcast(msg)
+			// A. If it's a market tick (Symbol is not empty)
+			if msg.Symbol != "" {
+				e.websocketHub.Broadcast(msg)
 
-			// B. Trigger Strategies
-			// Assuming Payload is JSON with "last_price" or numeric string.
-			// Ideally, we should parse it once.
-			// Adapt this struct to your actual Redis message format.
-			var tickData struct {
-				LastPrice float64 `json:"last_price"`
-			}
-			// Best effort parsing
-			if err := json.Unmarshal([]byte(msg.Payload), &tickData); err == nil {
-				commands := e.stratExec.OnMarketData(msg.Symbol, tickData.LastPrice)
-				for _, cmd := range commands {
-					if err := e.SendCommand(context.Background(), *cmd); err != nil {
-						log.Printf("Failed to send command for strategy: %v", err)
-					} else {
-						log.Printf("Strategy Triggered: Sent command %s", cmd.Type)
+				var tickData struct {
+					LastPrice float64 `json:"LastPrice"`
+				}
+				if err := json.Unmarshal([]byte(msg.Payload), &tickData); err == nil {
+					commands := e.stratExec.OnMarketData(msg.Symbol, tickData.LastPrice)
+					for _, cmd := range commands {
+						_ = e.SendCommand(context.Background(), *cmd)
 					}
 				}
+			} else {
+				// B. It's a Query Response from Pub/Sub (Symbol is empty)
+				e.handleTradeResponse(string(msg.Payload))
 			}
 		}
 	}()
@@ -102,10 +106,10 @@ func (e *Engine) listenTradeResponses() {
 	for {
 		// BRPOP blocks until data is available. 0 means block indefinitely.
 		// Returns [key, value]
-		val, err := e.rdb.BRPop(ctx, 0, infra.ResponseQueueKey).Result()
+		val, err := e.rdb.BRPop(ctx, 0, infra.PushCtpTradeReportList).Result()
 		if err != nil {
 			log.Printf("Error popping from response queue: %v", err)
-			time.Sleep(1 * time.Second) // Wait a bit before retrying on error
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
@@ -214,7 +218,6 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 		// Payload: {"positions": []model.Position}
 		if positions, ok := payload["positions"].([]interface{}); ok {
 			for _, p := range positions {
-				// We need a way to unmarshal map[string]interface{} into model.Position
 				pBytes, _ := json.Marshal(p)
 				var pos model.Position
 				if err := json.Unmarshal(pBytes, &pos); err == nil {
@@ -222,6 +225,22 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 				}
 			}
 			log.Printf("Synchronized %d positions from CTP Core", len(positions))
+		}
+
+	case "QRY_INSTRUMENT_RSP":
+		// This is a response to an instrument query command
+		// Payload: {"instruments": []model.FuturesContract}
+		log.Printf("Received QRY_INSTRUMENT_RSP: %v", payload)	
+		if instruments, ok := payload["instruments"].([]interface{}); ok {
+			for _, inst := range instruments {
+				instBytes, _ := json.Marshal(inst)
+				var instrument model.FuturesContract
+				if err := json.Unmarshal(instBytes, &instrument); err == nil {
+					// Upsert instrument data
+					db.Save(&instrument)
+				}
+			}
+			log.Printf("Synchronized %d instruments from CTP Core", len(instruments))
 		}
 	}
 }
@@ -284,20 +303,78 @@ func (e *Engine) updatePosition(order model.Order, tradePayload map[string]inter
 }
 
 // QueryPositions sends a command to CTP Core to fetch all positions for a user.
-func (e *Engine) QueryPositions(userID string) error {
-	cmd := infra.TradeCommand{
+func (e *Engine) QueryPositions(userID string, symbol string) error {
+	cmd := infra.Command{
 		Type: "QUERY_POSITIONS",
-		Payload: map[string]string{
+		Payload: map[string]interface{}{
 			"user_id": userID,
+			"symbol":  symbol,
 		},
 		RequestID: "query-pos-" + time.Now().Format("20060102150405"),
 	}
 	return e.SendCommand(context.Background(), cmd)
 }
 
-// SendCommand wraps infra.SendTradeCommand using the engine's Redis client.
-func (e *Engine) SendCommand(ctx context.Context, cmd infra.TradeCommand) error {
-	return infra.SendTradeCommand(ctx, e.rdb, cmd)
+// QueryAccount sends a command to CTP Core to fetch trading account info.
+func (e *Engine) QueryAccount(userID string) error {
+	cmd := infra.Command{
+		Type: "QUERY_ACCOUNT",
+		Payload: map[string]interface{}{
+			"user_id": userID,
+		},
+		RequestID: "query-acc-" + time.Now().Format("20060102150405"),
+	}
+	return e.SendCommand(context.Background(), cmd)
+}
+
+// SyncInstruments triggers CTP Core to fetch all available instruments.
+func (e *Engine) SyncInstruments() error {
+	cmd := infra.Command{
+		Type:      "QUERY_INSTRUMENTS",
+		Payload:   map[string]interface{}{}, // Empty payload for all instruments
+		RequestID: "sync-inst-" + time.Now().Format("20060102150405"),
+	}
+	log.Println("Engine: Triggering Instrument Sync from CTP Core")
+	return e.SendCommand(context.Background(), cmd)
+}
+
+// SendCommand wraps infra.SendCommand using the engine's Redis client.
+func (e *Engine) SendCommand(ctx context.Context, cmd infra.Command) error {
+	return infra.SendCommand(ctx, e.rdb, cmd)
+}
+
+// SubscribeSymbol adds a symbol to the engine's tracking and sends a subscribe command to CTP if it's new.
+func (e *Engine) SubscribeSymbol(symbol string) error {
+	isFirst := e.subs.AddSubscription(symbol)
+
+	if isFirst {
+		log.Printf("Engine: New subscription for %s, sending command to CTP", symbol)
+		cmd := infra.Command{
+			Type: "SUBSCRIBE",
+			Payload: map[string]interface{}{
+				"symbol": symbol,
+			},
+			RequestID: "sub-" + symbol + "-" + time.Now().Format("20060102150405"),
+		}
+		return e.SendCommand(context.Background(), cmd)
+	}
+	return nil
+}
+
+// UnsubscribeSymbol removes a symbol reference and sends an unsubscribe command if it's the last one.
+func (e *Engine) UnsubscribeSymbol(symbol string) error {
+	if e.subs.RemoveSubscription(symbol) {
+		log.Printf("Engine: No more subscribers for %s, sending unsubscribe to CTP", symbol)
+		cmd := infra.Command{
+			Type: "UNSUBSCRIBE",
+			Payload: map[string]interface{}{
+				"symbol": symbol,
+			},
+			RequestID: "unsub-" + symbol + "-" + time.Now().Format("20060102150405"),
+		}
+		return e.SendCommand(context.Background(), cmd)
+	}
+	return nil
 }
 
 // GetSubscriptionState returns the subscription state manager.

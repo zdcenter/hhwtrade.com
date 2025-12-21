@@ -1,6 +1,9 @@
 package api
 
 import (
+	"log"
+	"strconv"
+
 	"github.com/gofiber/fiber/v2"
 	"hhwtrade.com/internal/engine"
 	"hhwtrade.com/internal/model"
@@ -14,19 +17,45 @@ func NewSubscriptionHandler(eng *engine.Engine) *SubscriptionHandler {
 	return &SubscriptionHandler{eng: eng}
 }
 
-// GetSubscriptions returns the list of symbols subscribed by a user.
-// GET /api/users/:userID/subscriptions
+// GetSubscriptions returns the list of symbols subscribed by a user with pagination.
+// GET /api/users/:userID/subscriptions?page=1&pageSize=10
 func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
-	var subs []model.UserSubscription
 
-	// Use the Postgres client from the engine
+	// Pagination parameters
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	offset := (page - 1) * pageSize
+
+	var subs []model.UserSubscription
+	var total int64
+
 	db := h.eng.GetPostgresClient().DB
-	if err := db.Where("user_id = ?", userID).Find(&subs).Error; err != nil {
+
+	// Count total records
+	if err := db.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to count subscriptions"})
+	}
+
+	// Fetch paginated data
+	if err := db.Where("user_id = ?", userID).Limit(pageSize).Offset(offset).Find(&subs).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch subscriptions"})
 	}
 
-	return c.JSON(subs)
+	return c.JSON(fiber.Map{
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+		"data":     subs,
+	})
 }
 
 // AddSubscription adds a symbol to the user's subscription list.
@@ -57,6 +86,11 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	// Trigger WebSocket Subscription
 	h.eng.GetWsManager().SubscribeUser(userID, req.Symbol)
 
+	// Trigger Engine CTP Subscription
+	if err := h.eng.SubscribeSymbol(req.Symbol); err != nil {
+		log.Printf("API: Failed to trigger CTP subscription for %s: %v", req.Symbol, err)
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(sub)
 }
 
@@ -80,25 +114,45 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	// Trigger WebSocket Unsubscription
 	h.eng.GetWsManager().UnsubscribeUser(userID, symbol)
 
+	// Trigger Engine CTP Unsubscription
+	if err := h.eng.UnsubscribeSymbol(symbol); err != nil {
+		log.Printf("API: Failed to trigger CTP unsubscription for %s: %v", symbol, err)
+	}
+
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// SearchInstruments searches for instruments by symbol or name.
+// SearchInstruments searches for instruments by symbol, product ID, or name.
 // GET /api/instruments?query=rb
 func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
 	query := c.Query("query")
 	if query == "" {
-		return c.JSON([]model.Instrument{})
+		return c.JSON([]model.FuturesContract{})
 	}
 
-	var instruments []model.Instrument
+	var instruments []model.FuturesContract
 	db := h.eng.GetPostgresClient().DB
 
-	// Simple case-insensitive approximate search
-	// Check database compatibility for ILIKE (Postgres specific)
-	if err := db.Where("symbol ILIKE ? OR name ILIKE ?", "%"+query+"%", "%"+query+"%").Limit(20).Find(&instruments).Error; err != nil {
+	// Priority Search:
+	// 1. Prefix match on Symbol (e.g. rb%)
+	// 2. Exact match on ProductID (e.g. rb)
+	// 3. Fuzzy match on Name
+	searchTerm := query + "%"
+	if err := db.Model(&model.FuturesContract{}).Where("symbol ILIKE ? OR product_id ILIKE ? OR name ILIKE ?", searchTerm, query, "%"+query+"%").
+		Order("symbol ASC").
+		Limit(50).
+		Find(&instruments).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to search instruments"})
 	}
 
 	return c.JSON(instruments)
+}
+
+// SyncInstruments triggers the background process to fetch and save all instruments from CTP.
+// POST /api/instruments/sync
+func (h *SubscriptionHandler) SyncInstruments(c *fiber.Ctx) error {
+	if err := h.eng.SyncInstruments(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to trigger instrument sync"})
+	}
+	return c.JSON(fiber.Map{"message": "Instrument synchronization triggered"})
 }

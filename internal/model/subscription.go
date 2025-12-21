@@ -14,11 +14,19 @@ type UserSubscription struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Instrument represents a tradable contract/symbol in the system.
+// FuturesContract represents a tradable contract/symbol in the system.
 // This can be used for searching symbols.
-type Instrument struct {
-	Symbol   string `gorm:"primaryKey" json:"symbol"` // e.g., "rb2601"
-	Name     string `json:"name"`                     // e.g., "Steel Rebar 2601"
-	Exchange string `json:"exchange"`                 // e.g., "SHFE"
-	Type     string `json:"type"`                     // e.g., "future", "stock"
+type FuturesContract struct {
+	Symbol           string `gorm:"primaryKey" json:"symbol"`           // e.g., "rb2601"
+	Name             string `gorm:"index" json:"name"`                  // e.g., "Steel Rebar 2601"
+	Exchange         string `json:"exchange"`                           // e.g., "SHFE"
+	ProductID        string `gorm:"index" json:"product_id"`            // e.g., "rb" (Product code)
+	UnderlyingSymbol string `json:"underlying_symbol"`                  // For options/derivatives
+	Type             string `json:"type"`                               // e.g., "future", "options"
+	ExpiryDate       string `json:"expiry_date"`                        // Optional: "20260115"
+}
+
+// TableName explicitly sets the database table name for the FuturesContract model.
+func (FuturesContract) TableName() string {
+	return "futures_contracts"
 }

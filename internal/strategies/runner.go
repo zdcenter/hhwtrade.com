@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"hhwtrade.com/internal/infra"
 	"hhwtrade.com/internal/model"
@@ -13,8 +14,8 @@ import (
 // 不管是条件单、网格交易还是 CTA 策略，都必须实现这些方法
 type StrategyRunner interface {
 	// OnTick 当收到新的行情数据时被调用
-	// 返回值: 如果需要下单，返回 TradeCommand；否则返回 nil
-	OnTick(price float64) *infra.TradeCommand
+	// 返回值: 如果需要下单，返回 Command；否则返回 nil
+	OnTick(price float64) *infra.Command
 }
 
 // =======================
@@ -24,6 +25,7 @@ type StrategyRunner interface {
 // ConditionOrderRunner 是条件单的具体执行逻辑
 type ConditionOrderRunner struct {
 	strategyID uint                       // 策略 ID (数据库主键)
+	symbol     string                     // 合约代码
 	cfg        model.ConditionOrderConfig // 解析后的配置参数
 	triggered  bool                       // 运行时状态：是否已经触发过
 }
@@ -38,14 +40,14 @@ func NewConditionOrderRunner(strategy model.Strategy) (*ConditionOrderRunner, er
 
 	return &ConditionOrderRunner{
 		strategyID: strategy.ID,
+		symbol:     strategy.Symbol,
 		cfg:        cfg,
 		triggered:  false, // 初始状态未触发
 	}, nil
 }
 
 // OnTick 是策略的核心大脑
-// 每次行情更新，Engine 都会调用这个方法
-func (r *ConditionOrderRunner) OnTick(price float64) *infra.TradeCommand {
+func (r *ConditionOrderRunner) OnTick(price float64) *infra.Command {
 	// 1. 如果已经触发过了，就不要再触发了（防止重复下单）
 	if r.triggered {
 		return nil
@@ -79,20 +81,39 @@ func (r *ConditionOrderRunner) OnTick(price float64) *infra.TradeCommand {
 
 		r.triggered = true // 标记为已触发
 
-		// 组装下单指令
-		// 注意: 这里 Payload 应该根据您的 CTP Core 要求的格式来写
-		// 暂时用 map 表示，实际可能需要 OrderRequest 结构体
-		payload := map[string]interface{}{
-			"symbol":    "unknown", // Symbol 应该由 Engine 传入或存在 Runner 里，这里简化
-			"direction": r.cfg.Action,
-			"volume":    r.cfg.Volume,
-			"price":     price, //以此价格或其他价格下单
+		// 映射策略 Action 到 CTP 指令字符
+		// CTP 规范: Direction ('0':买, '1':卖), Offset ('0':开, '1':平, '3':平今)
+		direction := "0"
+		offset := "0"
+
+		switch r.cfg.Action {
+		case "open_long":
+			direction = "0"
+			offset = "0"
+		case "close_long":
+			direction = "1"
+			offset = "1"
+		case "open_short":
+			direction = "1"
+			offset = "0"
+		case "close_short":
+			direction = "0"
+			offset = "1"
 		}
 
-		return &infra.TradeCommand{
-			Type:      "INSERT_ORDER",
-			Payload:   payload,
-			RequestID: fmt.Sprintf("strat-%d-%d", r.strategyID, timeNowUnix()),
+		// 组装下单指令，严格遵循统一协议
+		return &infra.Command{
+			Type: "INSERT_ORDER",
+			Payload: map[string]interface{}{
+				"symbol":      r.symbol,
+				"direction":   direction,
+				"offset":      offset,
+				"volume":      r.cfg.Volume,
+				"price":       price,
+				"order_ref":   fmt.Sprintf("strat-%d", r.strategyID),
+				"strategy_id": r.strategyID,
+			},
+			RequestID: fmt.Sprintf("strat-%d-%v", r.strategyID, timeNowUnix()),
 		}
 	}
 
@@ -100,5 +121,5 @@ func (r *ConditionOrderRunner) OnTick(price float64) *infra.TradeCommand {
 }
 
 func timeNowUnix() int64 {
-	return 0 // simplified
+	return time.Now().Unix()
 }

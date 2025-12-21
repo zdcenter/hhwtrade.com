@@ -47,6 +47,10 @@ type WsManager struct {
 
 	// User connection mapping: UserID -> Set of Connections
 	userConns map[string]map[*websocket.Conn]bool
+
+	// sendChannels stores a buffered channel for each client.
+	// This helps avoid blocking the main engine loop if one client is slow.
+	sendChannels map[*websocket.Conn]chan interface{}
 }
 
 type UserConnection struct {
@@ -63,6 +67,7 @@ var GlobalWsManager = &WsManager{
 	clients:       make(map[*websocket.Conn]bool),
 	userConns:     make(map[string]map[*websocket.Conn]bool),
 	subscriptions: make(map[string]map[*websocket.Conn]bool),
+	sendChannels:  make(map[*websocket.Conn]chan interface{}),
 	Register:      make(chan UserConnection),
 	Unregister:    make(chan UserConnection),
 	Subscribe:     make(chan Subscription),
@@ -104,6 +109,22 @@ func (manager *WsManager) Start() {
 			manager.mu.Lock()
 			manager.clients[req.Conn] = true
 
+			// Create a buffered channel for this connection
+			sendCh := make(chan interface{}, 256)
+			manager.sendChannels[req.Conn] = sendCh
+
+			// Start a dedicated writer goroutine for this connection
+			go func(conn *websocket.Conn, ch chan interface{}) {
+				for msg := range ch {
+					if err := conn.WriteJSON(msg); err != nil {
+						// On error, let the connection close and unregister handle it
+						log.Printf("WS WriteLoop error: %v", err)
+						conn.Close()
+						return
+					}
+				}
+			}(req.Conn, sendCh)
+
 			// Track user connection
 			if req.UserID != "" {
 				if manager.userConns[req.UserID] == nil {
@@ -119,6 +140,12 @@ func (manager *WsManager) Start() {
 			manager.mu.Lock()
 			if _, ok := manager.clients[req.Conn]; ok {
 				delete(manager.clients, req.Conn)
+
+				// Cleanup send channel
+				if ch, exists := manager.sendChannels[req.Conn]; exists {
+					close(ch)
+					delete(manager.sendChannels, req.Conn)
+				}
 
 				// Remove from user mapping
 				if req.UserID != "" && manager.userConns[req.UserID] != nil {
@@ -165,17 +192,21 @@ func (manager *WsManager) Start() {
 // Broadcast sends the market message to all subscribers.
 func (manager *WsManager) Broadcast(msg MarketMessage) {
 	manager.mu.RLock()
-	subscribers, ok := manager.subscriptions[msg.Symbol]
-	manager.mu.RUnlock()
+	defer manager.mu.RUnlock()
 
+	subscribers, ok := manager.subscriptions[msg.Symbol]
 	if ok {
+		// Defensive check: don't broadcast empty payloads which break JSON marshaling
+		if len(msg.Payload) == 0 {
+			return
+		}
 		for conn := range subscribers {
-			// NOTE: This write might block if client is slow.
-			// In production, you might want a per-client send channel.
-			if err := conn.WriteJSON(msg); err != nil {
-				log.Printf("Error writing to websocket: %v", err)
-				conn.Close()
-				// We'll rely on the read loop detecting close and sending to Unregister
+			if ch, exists := manager.sendChannels[conn]; exists {
+				select {
+				case ch <- msg.Payload: // 只推送原始 Payload (json.RawMessage)
+				default:
+					// Buffer full: drop message for this specific slow client
+				}
 			}
 		}
 	}
@@ -184,14 +215,17 @@ func (manager *WsManager) Broadcast(msg MarketMessage) {
 // PushToUser sends a message to all active connections of a specific user.
 func (manager *WsManager) PushToUser(userID string, msg interface{}) {
 	manager.mu.RLock()
-	conns, ok := manager.userConns[userID]
-	manager.mu.RUnlock()
+	defer manager.mu.RUnlock()
 
+	conns, ok := manager.userConns[userID]
 	if ok {
 		for conn := range conns {
-			if err := conn.WriteJSON(msg); err != nil {
-				log.Printf("Error pushing message to user %s: %v", userID, err)
-				conn.Close()
+			if ch, exists := manager.sendChannels[conn]; exists {
+				select {
+				case ch <- msg:
+				default:
+					// Skip if buffer is full
+				}
 			}
 		}
 	}

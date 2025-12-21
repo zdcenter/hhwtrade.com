@@ -18,10 +18,12 @@ func NewSubscriptionState() *SubscriptionState {
 }
 
 // AddSubscription increments the subscriber count for a symbol.
-func (s *SubscriptionState) AddSubscription(symbol string) {
+// Returns true if this is the first subscription for the symbol.
+func (s *SubscriptionState) AddSubscription(symbol string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.activeSymbols[symbol]++
+	return s.activeSymbols[symbol] == 1
 }
 
 // RemoveSubscription decrements the subscriber count for a symbol.

@@ -28,7 +28,7 @@ func NewPostgresClient(cfg config.DatabaseConfig) (*PostgresClient, error) {
 	// Auto Migrate
 	if err := db.AutoMigrate(
 		&model.UserSubscription{},
-		&model.Instrument{},
+		&model.FuturesContract{},
 		&model.Strategy{},
 		&model.Order{},
 		&model.Position{},

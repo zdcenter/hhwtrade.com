@@ -36,7 +36,8 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	api.Post("/users/:userID/subscriptions", subHandler.AddSubscription)
 	api.Delete("/users/:userID/subscriptions/:symbol", subHandler.RemoveSubscription)
 
-	api.Get("/instruments", subHandler.SearchInstruments)
+	api.Get("/futures-contracts/search", subHandler.SearchInstruments)
+	api.Post("/futures-contracts/sync", subHandler.SyncInstruments)
 
 	// Strategy Routes
 	api.Post("/strategies", strategyHandler.CreateStrategy)
@@ -47,9 +48,11 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	// Trade Routes
 	tradeHandler := NewTradeHandler(eng)
 	api.Post("/trade/order", tradeHandler.InsertOrder)
+	api.Post("/trade/order/:id/cancel", tradeHandler.CancelOrder)
 	api.Get("/users/:userID/positions", tradeHandler.GetPositions)
 	api.Get("/users/:userID/orders", tradeHandler.GetOrders)
 	api.Post("/users/:userID/sync-positions", tradeHandler.SyncPositions)
+	api.Post("/users/:userID/sync-account", tradeHandler.SyncAccount)
 
 	return app
 }
