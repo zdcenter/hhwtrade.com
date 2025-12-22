@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 	"hhwtrade.com/internal/engine"
 	"hhwtrade.com/internal/model"
 )
@@ -46,7 +47,7 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	}
 
 	// Fetch paginated data
-	if err := db.Where("user_id = ?", userID).Limit(pageSize).Offset(offset).Find(&subs).Error; err != nil {
+	if err := db.Where("user_id = ?", userID).Order("sorter ASC").Limit(pageSize).Offset(offset).Find(&subs).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch subscriptions"})
 	}
 
@@ -119,13 +120,19 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 		log.Printf("API: Failed to trigger CTP unsubscription for %s: %v", symbol, err)
 	}
 
-	return c.SendStatus(fiber.StatusOK)
+	// --- 修改这里 ---
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":  true,
+		"message": "Unsubscribed successfully",
+		"symbol":  symbol,
+	})
 }
+
 
 // SearchInstruments searches for instruments by symbol, product ID, or name.
 // GET /api/instruments?query=rb
 func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
-	query := c.Query("query")
+	query := c.Query("q")
 	if query == "" {
 		return c.JSON([]model.FuturesContract{})
 	}
@@ -156,3 +163,33 @@ func (h *SubscriptionHandler) SyncInstruments(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"message": "Instrument synchronization triggered"})
 }
+
+
+func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
+	userID := c.Params("userID")
+	var req struct {
+		Symbols []string `json:"symbols"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+  db := h.eng.GetPostgresClient().DB
+    // 开启事务批量更新排序号
+    err := db.Transaction(func(tx *gorm.DB) error {
+        for i, symbol := range req.Symbols {
+            if err := tx.Model(&model.UserSubscription{}).
+                Where("user_id = ? AND symbol = ?", userID, symbol).
+                Update("sorter", i).Error; err != nil {
+                return err
+            }
+        }
+        return nil
+    })
+    
+    if err != nil {
+        return c.Status(500).JSON(fiber.Map{"error": "Failed to reorder"})
+    }
+    return c.JSON(fiber.Map{"status": true})
+}	

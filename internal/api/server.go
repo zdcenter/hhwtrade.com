@@ -34,6 +34,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	api := app.Group("/api")
 	api.Get("/users/:userID/subscriptions", subHandler.GetSubscriptions)
 	api.Post("/users/:userID/subscriptions", subHandler.AddSubscription)
+	api.Put("/users/:userID/subscriptions/reorder", subHandler.ReorderSubscriptions)
 	api.Delete("/users/:userID/subscriptions/:symbol", subHandler.RemoveSubscription)
 
 	api.Get("/futures-contracts/search", subHandler.SearchInstruments)

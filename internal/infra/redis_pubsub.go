@@ -36,9 +36,16 @@ func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 		defer pubsub.Close()
 		log.Println("Started Market Data Subscriber Loop")
 		for msg := range ch {
-			// Skip empty payloads which cause JSON marshaling errors later
+			// Skip empty payloads
 			payload := strings.TrimSpace(msg.Payload)
 			if payload == "" {
+				continue
+			}
+
+			// Defensive: Validate JSON before wrapping in RawMessage
+			// If CTP core sends truncated JSON, this will catch it
+			if !json.Valid([]byte(payload)) {
+				log.Printf("Warning: Dropping invalid JSON from Redis channel %s: %s", msg.Channel, payload)
 				continue
 			}
 
@@ -73,6 +80,12 @@ func StartQueryReplySubscriber(rdb *redis.Client, ctx context.Context) {
 		for msg := range ch {
 			payload := strings.TrimSpace(msg.Payload)
 			if payload == "" {
+				continue
+			}
+
+			// Defensive: Validate JSON from Query Reply channel
+			if !json.Valid([]byte(payload)) {
+				log.Printf("Warning: Dropping invalid JSON from Query Reply channel: %s", payload)
 				continue
 			}
 
