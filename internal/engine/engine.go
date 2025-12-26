@@ -143,41 +143,65 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 	switch resp.Type {
 	case "RTN_ORDER":
 		// Order Status Update
-		// Payload: {"status": "accepted", "order_sys_id": "12345", "error_msg": ""}
+		// Payload: {"status": "1", "order_sys_id": "12345", "error_msg": ""}
 		statusStr, _ := payload["status"].(string)
 		orderSysID, _ := payload["order_sys_id"].(string)
 		errorMsg, _ := payload["error_msg"].(string)
+		
+		var order model.Order
+		if err := db.Where("order_ref = ?", resp.RequestID).First(&order).Error; err == nil {
+			// Record Log
+			db.Create(&model.OrderStatusLog{
+				OrderID:   order.ID,
+				OldStatus: string(order.Status),
+				NewStatus: statusStr,
+				Message:   errorMsg,
+				CreatedAt: time.Now(),
+			})
 
-		updates := map[string]interface{}{}
-		if statusStr != "" {
-			updates["status"] = statusStr
-		}
-		if orderSysID != "" {
-			updates["order_sys_id"] = orderSysID
-		}
-		if errorMsg != "" {
-			updates["error_msg"] = errorMsg
-		}
+			updates := map[string]interface{}{}
+			if statusStr != "" {
+				updates["status"] = statusStr
+			}
+			if orderSysID != "" {
+				updates["order_sys_id"] = orderSysID
+			}
+			if errorMsg != "" {
+				updates["error_msg"] = errorMsg
+			}
 
-		if len(updates) > 0 {
-			if err := db.Model(&model.Order{}).Where("request_id = ?", resp.RequestID).Updates(updates).Error; err == nil {
-				var order model.Order
-				if db.Where("request_id = ?", resp.RequestID).First(&order).Error == nil {
-					e.websocketHub.PushToUser(order.UserID, resp)
-				}
+			if len(updates) > 0 {
+				db.Model(&order).Updates(updates)
+				// Notify User
+				e.websocketHub.PushToUser(order.UserID, resp)
 			}
 		}
 
 	case "RTN_TRADE":
 		// Trade Execution (Deal)
-		// Payload: {"price": 3500, "volume": 1, "trade_id": "T1", "direction": "buy", "offset": "open"}
+		// Payload: {"price": 3500, "volume": 1, "trade_id": "T1", "direction": "0", "offset": "0"}
 
 		var order model.Order
-		if err := db.Where("request_id = ?", resp.RequestID).First(&order).Error; err == nil {
-			// 1. Partial Fill Logic
-			tradeVol, _ := payload["volume"].(float64) // Redis may send as float
-			newFilledVol := order.FilledVolume + int(tradeVol)
+		if err := db.Where("order_ref = ?", resp.RequestID).First(&order).Error; err == nil {
+			tradeVol, _ := payload["volume"].(float64) 
+			price, _ := payload["price"].(float64)
+			tradeID, _ := payload["trade_id"].(string)
 
+			// 1. Insert Trade Record
+			db.Create(&model.TradeRecord{
+				OrderID:   order.ID,
+				TicketNo:  order.OrderRef,
+				TradeID:   tradeID,
+				Symbol:    order.Symbol,
+				Direction: string(order.Direction),
+				Offset:    string(order.Offset),
+				Price:     price,
+				Volume:    int(tradeVol),
+				TradeTime: time.Now().Format("15:04:05"), 
+			})
+
+			// 2. Partial Fill Logic
+			newFilledVol := order.FilledVolume + int(tradeVol)
 			updates := map[string]interface{}{
 				"filled_volume": newFilledVol,
 			}
@@ -185,16 +209,15 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 			if newFilledVol >= order.Volume {
 				updates["status"] = model.OrderStatusFilled
 			} else {
-				// Some exchanges use status codes for partial fill
-				updates["status"] = "partial"
+				updates["status"] = model.OrderStatusPartial
 			}
 
 			db.Model(&order).Updates(updates)
 
-			// 2. Update Position
+			// 3. Update Position
 			e.updatePosition(order, payload)
 
-			// 3. Notify user
+			// 4. Notify user
 			e.websocketHub.PushToUser(order.UserID, resp)
 		}
 		log.Printf("Trade for %s: Volume %v", resp.RequestID, payload["volume"])
@@ -202,15 +225,23 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 	case "ERR_ORDER":
 		// Immediate Rejection
 		errorMsg, _ := payload["error_msg"].(string)
-		if err := db.Model(&model.Order{}).Where("request_id = ?", resp.RequestID).Updates(map[string]interface{}{
-			"status":    model.OrderStatusRejected,
-			"error_msg": errorMsg,
-		}).Error; err == nil {
-			// Find order to get UserID
-			var order model.Order
-			if db.Where("request_id = ?", resp.RequestID).First(&order).Error == nil {
-				e.websocketHub.PushToUser(order.UserID, resp)
-			}
+		
+		var order model.Order
+		if db.Where("order_ref = ?", resp.RequestID).First(&order).Error == nil {
+			// Log Rejection
+			db.Create(&model.OrderStatusLog{
+				OrderID:   order.ID,
+				OldStatus: string(order.Status),
+				NewStatus: string(model.OrderStatusRejected),
+				Message:   errorMsg,
+				CreatedAt: time.Now(),
+			})
+
+			db.Model(&order).Updates(map[string]interface{}{
+				"status":    model.OrderStatusRejected,
+				"error_msg": errorMsg,
+			})
+			e.websocketHub.PushToUser(order.UserID, resp)
 		}
 
 	case "QRY_POS_RSP":

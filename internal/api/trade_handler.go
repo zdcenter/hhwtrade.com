@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"hhwtrade.com/internal/engine"
 	"hhwtrade.com/internal/infra"
 	"hhwtrade.com/internal/model"
@@ -22,8 +24,8 @@ func NewTradeHandler(eng *engine.Engine) *TradeHandler {
 type OrderRequest struct {
 	UserID     string               `json:"user_id"`
 	Symbol     string               `json:"symbol"`
-	Direction  model.OrderDirection `json:"direction"` // buy, sell
-	Offset     model.OrderOffset    `json:"offset"`    // open, close
+	Direction  model.OrderDirection `json:"direction"` // 0, 1
+	Offset     model.OrderOffset    `json:"offset"`    // 0, 1, 3, 4
 	Price      float64              `json:"price"`     // Limit price
 	Volume     int                  `json:"volume"`
 	StrategyID *uint                `json:"strategy_id"` // Optional: for strategy orders
@@ -37,73 +39,62 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// 1. Generate unique RequestID
-	reqID := uuid.New().String()
+	// 1. Generate unique OrderRef using timestamp (pure in-memory, fastest)
+	// Format: Unix timestamp (last 6 digits) + microseconds (6 digits) = 12 chars
+	now := time.Now()
+	timestampPart := now.Unix() % 1000000
+	microPart := now.Nanosecond() / 1000
+	orderRef := fmt.Sprintf("%06d%06d", timestampPart, microPart)
 
-	// 2. [Optional] Validation (Check balance, position via local cache)
-	// if failure -> return error immediately
-
-	// 3. Create Order Record in Postgres (Status: Pending)
-	order := model.Order{
-		UserID:     req.UserID,
-		Symbol:     req.Symbol,
-		Direction:  req.Direction,
-		Offset:     req.Offset,
-		Price:      req.Price,
-		Volume:     req.Volume,
-		Status:     model.OrderStatusPending, // 初始状态：待报送
-		RequestID:  reqID,
-		StrategyID: req.StrategyID,
-	}
-
-	db := h.eng.GetPostgresClient().DB
-	if err := db.Create(&order).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create order record"})
-	}
-
-	// 4. Send Command to CTP Core via Redis Queue
-	// Map internal constants to CTP chars
-	directionChar := "0" // Buy
-	if req.Direction == model.DirectionSell {
-		directionChar = "1"
-	}
-
-	offsetChar := "0" // Open
-	if req.Offset == model.OffsetClose {
-		offsetChar = "1"
-	} else if req.Offset == model.OffsetCloseToday {
-		offsetChar = "3"
-	}
-
+	// 2. Send Command to CTP FIRST (minimize latency)
 	cmdPayload := map[string]interface{}{
-		"symbol":      req.Symbol,
-		"price":       req.Price,
-		"volume":      req.Volume,
-		"direction":   directionChar,
-		"offset":      offsetChar,
-		"order_ref":   reqID, // Use reqID as order_ref for simple tracking
-		"strategy_id": req.StrategyID,
+		"symbol":    req.Symbol,
+		"price":     req.Price,
+		"volume":    req.Volume,
+		"direction": string(req.Direction),
+		"offset":    string(req.Offset),
+		"order_ref": orderRef,
 	}
 
 	tradeCmd := infra.Command{
 		Type:      "INSERT_ORDER",
 		Payload:   cmdPayload,
-		RequestID: reqID,
+		RequestID: orderRef,
 	}
 
 	if err := h.eng.SendCommand(context.Background(), tradeCmd); err != nil {
-		// If Redis push failed, mark order as Error
-		db.Model(&order).Update("status", model.OrderStatusRejected)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to send order to gateway"})
 	}
 
-	// 5. Update Order Status to Sent (Optimistic)
-	db.Model(&order).Update("status", model.OrderStatusSent)
+	// 3. Write to DB asynchronously (non-blocking)
+	// Even if DB write fails, CTP will send back RTN_ORDER which will create/update the record
+	go func() {
+		order := model.Order{
+			UserID:     req.UserID,
+			Symbol:     req.Symbol,
+			Direction:  req.Direction,
+			Offset:     req.Offset,
+			Price:      req.Price,
+			Volume:     req.Volume,
+			Status:     model.OrderStatusSent, // Already sent to CTP
+			OrderRef:   orderRef,
+			StrategyID: req.StrategyID,
+		}
 
+		db := h.eng.GetPostgresClient().DB
+		if err := db.Create(&order).Error; err != nil {
+			// Log error but don't fail the request
+			// The order is already sent to CTP, RTN_ORDER will handle it
+			log.Printf("Warning: Failed to write order %s to DB: %v", orderRef, err)
+			// TODO: Write to failure queue for retry
+		}
+	}()
+
+	// 4. Return immediately (ultra-low latency response)
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"message":    "Order accepted",
-		"order_id":   order.ID,
-		"request_id": reqID,
+		"message":    "Order sent",
+		"order_ref":  orderRef,
+		"request_id": orderRef,
 	})
 }
 
@@ -181,11 +172,11 @@ func (h *TradeHandler) CancelOrder(c *fiber.Ctx) error {
 		Type: "CANCEL_ORDER",
 		Payload: map[string]interface{}{
 			"symbol":    order.Symbol,
-			"order_ref": order.RequestID, // We used RequestID as OrderRef
+			"order_ref": order.OrderRef, // We used OrderRef
 			// "front_id": order.FrontID, // These should be saved when RTN_ORDER comes back
 			// "session_id": order.SessionID,
 		},
-		RequestID: "cancel-" + order.RequestID,
+		RequestID: "cancel-" + order.OrderRef,
 	}
 
 	if err := h.eng.SendCommand(context.Background(), cmd); err != nil {

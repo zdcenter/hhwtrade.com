@@ -27,10 +27,13 @@ func NewPostgresClient(cfg config.DatabaseConfig) (*PostgresClient, error) {
 
 	// Auto Migrate
 	if err := db.AutoMigrate(
+		&model.User{},
 		&model.UserSubscription{},
 		&model.FuturesContract{},
 		&model.Strategy{},
 		&model.Order{},
+		&model.TradeRecord{},
+		&model.OrderStatusLog{},
 		&model.Position{},
 	); err != nil {
 		log.Printf("Warning: AutoMigrate failed: %v", err)
