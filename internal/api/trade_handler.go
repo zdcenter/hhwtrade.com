@@ -22,13 +22,13 @@ func NewTradeHandler(eng *engine.Engine) *TradeHandler {
 
 // OrderRequest payload
 type OrderRequest struct {
-	UserID     string               `json:"user_id"`
-	Symbol     string               `json:"symbol"`
-	Direction  model.OrderDirection `json:"direction"` // 0, 1
-	Offset     model.OrderOffset    `json:"offset"`    // 0, 1, 3, 4
-	Price      float64              `json:"price"`     // Limit price
-	Volume     int                  `json:"volume"`
-	StrategyID *uint                `json:"strategy_id"` // Optional: for strategy orders
+	UserID       string               `json:"user_id"`
+	InstrumentID string               `json:"instrument_id"`
+	Direction    model.OrderDirection `json:"direction"` // 0, 1
+	Offset       model.OrderOffset    `json:"offset"`    // 0, 1, 3, 4
+	Price        float64              `json:"price"`     // Limit price
+	Volume       int                  `json:"volume"`
+	StrategyID   *uint                `json:"strategy_id"` // Optional: for strategy orders
 }
 
 // InsertOrder handles ordinary order placement.
@@ -48,12 +48,12 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 
 	// 2. Send Command to CTP FIRST (minimize latency)
 	cmdPayload := map[string]interface{}{
-		"symbol":    req.Symbol,
-		"price":     req.Price,
-		"volume":    req.Volume,
-		"direction": string(req.Direction),
-		"offset":    string(req.Offset),
-		"order_ref": orderRef,
+		"instrument_id": req.InstrumentID,
+		"price":         req.Price,
+		"volume":        req.Volume,
+		"direction":    string(req.Direction),
+		"offset":       string(req.Offset),
+		"order_ref":    orderRef,
 	}
 
 	tradeCmd := infra.Command{
@@ -70,15 +70,15 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	// Even if DB write fails, CTP will send back RTN_ORDER which will create/update the record
 	go func() {
 		order := model.Order{
-			UserID:     req.UserID,
-			Symbol:     req.Symbol,
-			Direction:  req.Direction,
-			Offset:     req.Offset,
-			Price:      req.Price,
-			Volume:     req.Volume,
-			Status:     model.OrderStatusSent, // Already sent to CTP
-			OrderRef:   orderRef,
-			StrategyID: req.StrategyID,
+			UserID:       req.UserID,
+			InstrumentID: req.InstrumentID,
+			Direction:    req.Direction,
+			Offset:       req.Offset,
+			Price:        req.Price,
+			Volume:       req.Volume,
+			Status:       model.OrderStatusSent, // Already sent to CTP
+			OrderRef:     orderRef,
+			StrategyID:   req.StrategyID,
 		}
 
 		db := h.eng.GetPostgresClient().DB
@@ -164,15 +164,15 @@ func (h *TradeHandler) CancelOrder(c *fiber.Ctx) error {
 	}
 
 	// Only cancelable if not already terminal
-	if order.Status == model.OrderStatusFilled || order.Status == model.OrderStatusCanceled || order.Status == model.OrderStatusRejected {
+	if order.Status == model.OrderStatusAllTraded || order.Status == model.OrderStatusCanceled || order.Status == model.OrderStatusNoTradeNotQueueing {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Order already in terminal state"})
 	}
 
 	cmd := infra.Command{
 		Type: "CANCEL_ORDER",
 		Payload: map[string]interface{}{
-			"symbol":    order.Symbol,
-			"order_ref": order.OrderRef, // We used OrderRef
+			"instrument_id": order.InstrumentID,
+			"order_ref":     order.OrderRef, // We used OrderRef
 			// "front_id": order.FrontID, // These should be saved when RTN_ORDER comes back
 			// "session_id": order.SessionID,
 		},

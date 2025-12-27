@@ -59,13 +59,13 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	})
 }
 
-// AddSubscription adds a symbol to the user's subscription list.
+// AddSubscription adds an instrument_id to the user's subscription list.
 // POST /api/users/:userID/subscriptions
 func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	var req struct {
-		Symbol   string `json:"symbol"`
-		Exchange string `json:"exchange"`
+		InstrumentID string `json:"instrument_id"`
+		ExchangeID   string `json:"exchange_id"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -73,9 +73,9 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	}
 
 	sub := model.UserSubscription{
-		UserID:   userID,
-		Symbol:   req.Symbol,
-		Exchange: req.Exchange,
+		UserID:       userID,
+		InstrumentID: req.InstrumentID,
+		ExchangeID:   req.ExchangeID,
 	}
 
 	db := h.eng.GetPostgresClient().DB
@@ -85,11 +85,11 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	}
 
 	// Trigger WebSocket Subscription
-	h.eng.GetWsManager().SubscribeUser(userID, req.Symbol)
+	h.eng.GetWsManager().SubscribeUser(userID, req.InstrumentID)
 
 	// Trigger Engine CTP Subscription
-	if err := h.eng.SubscribeSymbol(req.Symbol); err != nil {
-		log.Printf("API: Failed to trigger CTP subscription for %s: %v", req.Symbol, err)
+	if err := h.eng.SubscribeSymbol(req.InstrumentID); err != nil {
+		log.Printf("API: Failed to trigger CTP subscription for %s: %v", req.InstrumentID, err)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(sub)
@@ -99,10 +99,10 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 // DELETE /api/users/:userID/subscriptions/:symbol
 func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	userID := c.Params("userID")
-	symbol := c.Params("symbol")
+	instrumentID := c.Params("symbol") // 保持 URL param 名为 symbol 也可以，只要逻辑对
 
 	db := h.eng.GetPostgresClient().DB
-	result := db.Where("user_id = ? AND symbol = ?", userID, symbol).Delete(&model.UserSubscription{})
+	result := db.Where("user_id = ? AND instrument_id = ?", userID, instrumentID).Delete(&model.UserSubscription{})
 
 	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove subscription"})
@@ -113,18 +113,18 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	}
 
 	// Trigger WebSocket Unsubscription
-	h.eng.GetWsManager().UnsubscribeUser(userID, symbol)
+	h.eng.GetWsManager().UnsubscribeUser(userID, instrumentID)
 
 	// Trigger Engine CTP Unsubscription
-	if err := h.eng.UnsubscribeSymbol(symbol); err != nil {
-		log.Printf("API: Failed to trigger CTP unsubscription for %s: %v", symbol, err)
+	if err := h.eng.UnsubscribeSymbol(instrumentID); err != nil {
+		log.Printf("API: Failed to trigger CTP unsubscription for %s: %v", instrumentID, err)
 	}
 
 	// --- 修改这里 ---
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  true,
 		"message": "Unsubscribed successfully",
-		"symbol":  symbol,
+		"instrument_id": instrumentID,
 	})
 }
 
@@ -145,8 +145,8 @@ func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
 	// 2. Exact match on ProductID (e.g. rb)
 	// 3. Fuzzy match on Name
 	searchTerm := query + "%"
-	if err := db.Model(&model.FuturesContract{}).Where("symbol ILIKE ? OR product_id ILIKE ? OR name ILIKE ?", searchTerm, query, "%"+query+"%").
-		Order("symbol ASC").
+	if err := db.Model(&model.FuturesContract{}).Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
+		Order("instrument_id ASC").
 		Limit(50).
 		Find(&instruments).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to search instruments"})

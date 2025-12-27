@@ -57,9 +57,9 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// 1.1 Trigger CTP Subscriptions for Active Strategies
 	// This ensures we get data even if no UI user is watching
-	for _, sym := range e.stratExec.GetSymbols() {
-		log.Printf("Engine: Subscribing to %s for active strategies", sym)
-		e.SubscribeSymbol(sym)
+	for _, instID := range e.stratExec.GetSymbols() {
+		log.Printf("Engine: Subscribing to %s for active strategies", instID)
+		e.SubscribeSymbol(instID)
 	}
 
 	// 2. Start WebSocket Manager
@@ -73,7 +73,7 @@ func (e *Engine) Start(ctx context.Context) {
 	go func() {
 		log.Println("Engine Event Loop Started")
 		for msg := range infra.MarketDataChan {
-			// A. If it's a market tick (Symbol is not empty)
+			// A. If it's a market tick (InstrumentID is not empty)
 			if msg.Symbol != "" {
 				e.websocketHub.Broadcast(msg)
 
@@ -81,6 +81,8 @@ func (e *Engine) Start(ctx context.Context) {
 					LastPrice float64 `json:"LastPrice"`
 				}
 				if err := json.Unmarshal([]byte(msg.Payload), &tickData); err == nil {
+					// NOTE: we keep msg.Symbol for internal websocket protocol, 
+					// but strategy might want InstrumentID
 					commands := e.stratExec.OnMarketData(msg.Symbol, tickData.LastPrice)
 					for _, cmd := range commands {
 						_ = e.SendCommand(context.Background(), *cmd)
@@ -188,13 +190,13 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 			tradeID, _ := payload["trade_id"].(string)
 
 			// 1. Insert Trade Record
-			db.Create(&model.TradeRecord{
-				OrderID:   order.ID,
-				TicketNo:  order.OrderRef,
-				TradeID:   tradeID,
-				Symbol:    order.Symbol,
-				Direction: string(order.Direction),
-				Offset:    string(order.Offset),
+				db.Create(&model.TradeRecord{
+				OrderID:      order.ID,
+				TicketNo:     order.OrderRef,
+				TradeID:      tradeID,
+				InstrumentID: order.InstrumentID,
+				Direction:    string(order.Direction),
+				Offset:       string(order.Offset),
 				Price:     price,
 				Volume:    int(tradeVol),
 				TradeTime: time.Now().Format("15:04:05"), 
@@ -207,9 +209,9 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 			}
 
 			if newFilledVol >= order.Volume {
-				updates["status"] = model.OrderStatusFilled
+				updates["status"] = model.OrderStatusAllTraded
 			} else {
-				updates["status"] = model.OrderStatusPartial
+				updates["status"] = model.OrderStatusPartTradedQueueing
 			}
 
 			db.Model(&order).Updates(updates)
@@ -232,13 +234,13 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 			db.Create(&model.OrderStatusLog{
 				OrderID:   order.ID,
 				OldStatus: string(order.Status),
-				NewStatus: string(model.OrderStatusRejected),
+				NewStatus: string(model.OrderStatusNoTradeNotQueueing), // Rejected/Failed
 				Message:   errorMsg,
 				CreatedAt: time.Now(),
 			})
 
 			db.Model(&order).Updates(map[string]interface{}{
-				"status":    model.OrderStatusRejected,
+				"status":    model.OrderStatusNoTradeNotQueueing,
 				"error_msg": errorMsg,
 			})
 			e.websocketHub.PushToUser(order.UserID, resp)
@@ -281,7 +283,7 @@ func (e *Engine) updatePosition(order model.Order, tradePayload map[string]inter
 	db := e.pg.DB
 
 	// Determine direction for Position model ("long" or "short")
-	// Note: CTP typically separates Long and Short positions for the same symbol.
+	// Note: CTP typically separates Long and Short positions for the same InstrumentID.
 	posDir := "long"
 	if order.Direction == model.DirectionSell && order.Offset == model.OffsetOpen {
 		posDir = "short"
@@ -290,7 +292,7 @@ func (e *Engine) updatePosition(order model.Order, tradePayload map[string]inter
 	}
 
 	var pos model.Position
-	err := db.Where("user_id = ? AND symbol = ? AND direction = ?", order.UserID, order.Symbol, posDir).First(&pos).Error
+	err := db.Where("user_id = ? AND instrument_id = ? AND direction = ?", order.UserID, order.InstrumentID, posDir).First(&pos).Error
 
 	tradeVol := order.Volume // In a real system, use volume from tradePayload if partial fill
 	tradePrice, _ := tradePayload["price"].(float64)
@@ -300,7 +302,7 @@ func (e *Engine) updatePosition(order model.Order, tradePayload map[string]inter
 		if order.Offset == model.OffsetOpen {
 			pos = model.Position{
 				UserID:       order.UserID,
-				Symbol:       order.Symbol,
+				InstrumentID: order.InstrumentID,
 				Direction:    posDir,
 				TotalVolume:  tradeVol,
 				TodayVolume:  tradeVol,
@@ -334,12 +336,12 @@ func (e *Engine) updatePosition(order model.Order, tradePayload map[string]inter
 }
 
 // QueryPositions sends a command to CTP Core to fetch all positions for a user.
-func (e *Engine) QueryPositions(userID string, symbol string) error {
+func (e *Engine) QueryPositions(userID string, instrumentID string) error {
 	cmd := infra.Command{
 		Type: "QUERY_POSITIONS",
 		Payload: map[string]interface{}{
 			"user_id": userID,
-			"symbol":  symbol,
+			"instrument_id":  instrumentID,
 		},
 		RequestID: "query-pos-" + time.Now().Format("20060102150405"),
 	}
@@ -375,17 +377,17 @@ func (e *Engine) SendCommand(ctx context.Context, cmd infra.Command) error {
 }
 
 // SubscribeSymbol adds a symbol to the engine's tracking and sends a subscribe command to CTP if it's new.
-func (e *Engine) SubscribeSymbol(symbol string) error {
-	isFirst := e.subs.AddSubscription(symbol)
+func (e *Engine) SubscribeSymbol(instrumentID string) error {
+	isFirst := e.subs.AddSubscription(instrumentID)
 
 	if isFirst {
-		log.Printf("Engine: New subscription for %s, sending command to CTP", symbol)
+		log.Printf("Engine: New subscription for %s, sending command to CTP", instrumentID)
 		cmd := infra.Command{
 			Type: "SUBSCRIBE",
 			Payload: map[string]interface{}{
-				"symbol": symbol,
+				"instrument_id": instrumentID,
 			},
-			RequestID: "sub-" + symbol + "-" + time.Now().Format("20060102150405"),
+			RequestID: "sub-" + instrumentID + "-" + time.Now().Format("20060102150405"),
 		}
 		return e.SendCommand(context.Background(), cmd)
 	}
@@ -393,15 +395,15 @@ func (e *Engine) SubscribeSymbol(symbol string) error {
 }
 
 // UnsubscribeSymbol removes a symbol reference and sends an unsubscribe command if it's the last one.
-func (e *Engine) UnsubscribeSymbol(symbol string) error {
-	if e.subs.RemoveSubscription(symbol) {
-		log.Printf("Engine: No more subscribers for %s, sending unsubscribe to CTP", symbol)
+func (e *Engine) UnsubscribeSymbol(instrumentID string) error {
+	if e.subs.RemoveSubscription(instrumentID) {
+		log.Printf("Engine: No more subscribers for %s, sending unsubscribe to CTP", instrumentID)
 		cmd := infra.Command{
 			Type: "UNSUBSCRIBE",
 			Payload: map[string]interface{}{
-				"symbol": symbol,
+				"instrument_id": instrumentID,
 			},
-			RequestID: "unsub-" + symbol + "-" + time.Now().Format("20060102150405"),
+			RequestID: "unsub-" + instrumentID + "-" + time.Now().Format("20060102150405"),
 		}
 		return e.SendCommand(context.Background(), cmd)
 	}

@@ -11,8 +11,8 @@ import (
 )
 
 type WsRequest struct {
-	Action string `json:"action"`   // "subscribe", "unsubscribe"
-	Symbol string `json:"symbol"` // rb2601, "AAPL", "MSFT"
+	Action       string `json:"action"`        // "subscribe", "unsubscribe"
+	InstrumentID string `json:"instrument_id"` // CTP: InstrumentID
 }
 
 func InitWebsocket(app *fiber.App, eng *engine.Engine) {
@@ -45,9 +45,9 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 		defer func() {
 			wsManager.Unregister <- infra.UserConnection{Conn: c, UserID: userID}
 			// Engine cleanup: Unsubscribe from all symbols this connection was watching
-			for symbol := range localSubs {
-				if err := eng.UnsubscribeSymbol(symbol); err != nil {
-					log.Printf("WS Cleanup: Failed to unsubscribe %s: %v", symbol, err)
+			for instrumentID := range localSubs {
+				if err := eng.UnsubscribeSymbol(instrumentID); err != nil {
+					log.Printf("WS Cleanup: Failed to unsubscribe %s: %v", instrumentID, err)
 				}
 			}
 			c.Close()
@@ -60,12 +60,12 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 				db := eng.GetPostgresClient().DB
 				if err := db.Where("user_id = ?", userID).Find(&subs).Error; err == nil {
 					for _, sub := range subs {
-						log.Printf("Auto-subscribing %s to %s", userID, sub.Symbol)
-						wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: sub.Symbol}
+						log.Printf("Auto-subscribing %s to %s", userID, sub.InstrumentID)
+						wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: sub.InstrumentID}
 						// Mark for local tracking and trigger Engine subscription
-						localSubs[sub.Symbol] = true
-						if err := eng.SubscribeSymbol(sub.Symbol); err != nil {
-							log.Printf("WS Auto-sub: Failed to trigger CTP subscription for %s: %v", sub.Symbol, err)
+						localSubs[sub.InstrumentID] = true
+						if err := eng.SubscribeSymbol(sub.InstrumentID); err != nil {
+							log.Printf("WS Auto-sub: Failed to trigger CTP subscription for %s: %v", sub.InstrumentID, err)
 						}
 					}
 				} else {
@@ -92,23 +92,23 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 			switch msg.Action {
 			case "subscribe":
 				// Handle logical subscription
-				wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: msg.Symbol}
+				wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: msg.InstrumentID}
 				// Track locally and trigger engine
-				if !localSubs[msg.Symbol] {
-					localSubs[msg.Symbol] = true
-					if err := eng.SubscribeSymbol(msg.Symbol); err != nil {
-						log.Printf("WS: Failed to trigger CTP subscription for %s: %v", msg.Symbol, err)
+				if !localSubs[msg.InstrumentID] {
+					localSubs[msg.InstrumentID] = true
+					if err := eng.SubscribeSymbol(msg.InstrumentID); err != nil {
+						log.Printf("WS: Failed to trigger CTP subscription for %s: %v", msg.InstrumentID, err)
 					}
 				}
 
 			case "unsubscribe":
 				// Handle logical unsubscription
-				wsManager.Unsubscribe <- infra.Subscription{Conn: c, Symbol: msg.Symbol}
+				wsManager.Unsubscribe <- infra.Subscription{Conn: c, Symbol: msg.InstrumentID}
 				// Remove from local tracking and trigger engine
-				if localSubs[msg.Symbol] {
-					delete(localSubs, msg.Symbol)
-					if err := eng.UnsubscribeSymbol(msg.Symbol); err != nil {
-						log.Printf("WS: Failed to trigger CTP unsubscription for %s: %v", msg.Symbol, err)
+				if localSubs[msg.InstrumentID] {
+					delete(localSubs, msg.InstrumentID)
+					if err := eng.UnsubscribeSymbol(msg.InstrumentID); err != nil {
+						log.Printf("WS: Failed to trigger CTP unsubscription for %s: %v", msg.InstrumentID, err)
 					}
 				}
 
