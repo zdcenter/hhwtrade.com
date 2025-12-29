@@ -4,32 +4,30 @@ import (
 	"time"
 )
 
-// UserSubscription stores the user's favorite symbols.
-type UserSubscription struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	UserID       string    `gorm:"index;uniqueIndex:idx_user_inst" json:"user_id"`
-	InstrumentID string    `gorm:"uniqueIndex:idx_user_inst" json:"instrument_id"` // 改为 InstrumentID
-	ExchangeID   string    `json:"exchange_id"`                                    // 改为 ExchangeID
-	Sorter       int       `json:"sorter"`
-	CreatedAt    time.Time `json:"created_at"`
+// Subscription stores the user's favorite symbols.
+type Subscription struct {
+	ID           uint      `gorm:"primaryKey" json:"ID"`
+	UserID       string    `gorm:"index;uniqueIndex:idx_user_inst" json:"UserID"`
+	InstrumentID string    `gorm:"uniqueIndex:idx_user_inst" json:"InstrumentID"`
+	ExchangeID   string    `json:"ExchangeID"`
+	Sorter       int       `json:"Sorter"`
+	CreatedAt    time.Time `json:"CreatedAt"`
 }
 
-// FuturesContract represents a tradable contract in the system.
-type FuturesContract struct {
-	InstrumentID         string  `gorm:"primaryKey" json:"instrument_id"`    // 改为 InstrumentID
-	ExchangeID           string  `json:"exchange_id"`                        // CTP: ExchangeID
-	InstrumentName       string  `gorm:"index" json:"instrument_name"`       // CTP: InstrumentName
-	ProductID            string  `gorm:"index" json:"product_id"`            // CTP: ProductID
-	PriceTick            float64 `json:"price_tick"`                         // CTP: PriceTick
-	VolumeMultiple       int     `json:"volume_multiple"`                    // CTP: VolumeMultiple
-	MaxMarketOrderVolume int     `json:"max_market_order_volume"`            // CTP: MaxMarketOrderVolume
-	MinMarketOrderVolume int     `json:"min_market_order_volume"`            // CTP: MinMarketOrderVolume
-	MaxLimitOrderVolume  int     `json:"max_limit_order_volume"`             // CTP: MaxLimitOrderVolume
-	MinLimitOrderVolume  int     `json:"min_limit_order_volume"`             // CTP: MinLimitOrderVolume
-	ExpireDate           string  `json:"expire_date"`                        // CTP: ExpireDate
-	IsTrading            int     `json:"is_trading"`                         // CTP: IsTrading
+// Future represents a tradable contract in the system.
+type Future struct {
+	InstrumentID         string  `gorm:"primaryKey" json:"InstrumentID"`
+	ExchangeID           string  `json:"ExchangeID"`
+	InstrumentName       string  `gorm:"index" json:"InstrumentName"`
+	ProductID            string  `gorm:"index" json:"ProductID"`
+	PriceTick            float64 `json:"PriceTick"`
+	VolumeMultiple       int     `json:"VolumeMultiple"`
+	MaxMarketOrderVolume int     `json:"MaxMarketOrderVolume"`
+	MinMarketOrderVolume int     `json:"MinMarketOrderVolume"`
+	MaxLimitOrderVolume  int     `json:"MaxLimitOrderVolume"`
+	MinLimitOrderVolume  int     `json:"MinLimitOrderVolume"`
+	ExpireDate           string  `json:"ExpireDate"`
+	IsTrading            int     `json:"IsTrading"`
 }
 
-func (FuturesContract) TableName() string {
-	return "futures_contracts"
-}
+

@@ -20,27 +20,27 @@ func NewStrategyHandler(eng *engine.Engine) *StrategyHandler {
 // POST /api/strategies
 func (h *StrategyHandler) CreateStrategy(c *fiber.Ctx) error {
 	var req struct {
-		UserID string             `json:"user_id"`
-		Symbol string             `json:"symbol"`
-		Type   model.StrategyType `json:"type"`
-		Config json.RawMessage    `json:"config"`
+		UserID       string             `json:"UserID"`
+		InstrumentID string             `json:"InstrumentID"`
+		Type         model.StrategyType `json:"Type"`
+		Config       json.RawMessage    `json:"Config"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
 	strategy := model.Strategy{
-		UserID: req.UserID,
-		Symbol: req.Symbol,
-		Type:   req.Type,
-		Status: model.StrategyStatusActive,
-		Config: req.Config,
+		UserID:       req.UserID,
+		InstrumentID: req.InstrumentID,
+		Type:         req.Type,
+		Status:       model.StrategyStatusActive,
+		Config:       req.Config,
 	}
 
 	db := h.eng.GetPostgresClient().DB
 	if err := db.Create(&strategy).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create strategy"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to create strategy"})
 	}
 
 	// TODO: Notify Engine to load this strategy into memory immediately
@@ -56,7 +56,7 @@ func (h *StrategyHandler) GetStrategies(c *fiber.Ctx) error {
 
 	db := h.eng.GetPostgresClient().DB
 	if err := db.Where("user_id = ?", userID).Find(&strategies).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch strategies"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch strategies"})
 	}
 
 	return c.JSON(strategies)
@@ -69,7 +69,7 @@ func (h *StrategyHandler) StopStrategy(c *fiber.Ctx) error {
 
 	db := h.eng.GetPostgresClient().DB
 	if err := db.Model(&model.Strategy{}).Where("id = ?", id).Update("status", model.StrategyStatusStopped).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to stop strategy"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to stop strategy"})
 	}
 
 	// TODO: Notify Engine to unload this strategy from memory
@@ -84,7 +84,7 @@ func (h *StrategyHandler) StartStrategy(c *fiber.Ctx) error {
 
 	db := h.eng.GetPostgresClient().DB
 	if err := db.Model(&model.Strategy{}).Where("id = ?", id).Update("status", model.StrategyStatusActive).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to start strategy"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to start strategy"})
 	}
 
 	// TODO: Notify Engine to load this strategy into memory immediately

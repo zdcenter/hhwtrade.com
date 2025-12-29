@@ -12,7 +12,7 @@ import (
 // MarketMessage is used for internal routing between Redis and WebSocket/Engine.
 type MarketMessage struct {
 	Symbol  string          `json:"-"`       // Internal routing key (e.g. "rb2605")
-	Payload json.RawMessage `json:"payload"` // Raw CTP JSON data
+	Payload json.RawMessage `json:"Payload"` // Raw CTP JSON data
 }
 
 // MarketDataChan is now a channel of MarketMessage.

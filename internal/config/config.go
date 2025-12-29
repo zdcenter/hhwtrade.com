@@ -24,8 +24,9 @@ type DatabaseConfig struct {
 	User     string
 	Password string
 	DBName   string
-	SSLMode  string
-	TimeZone string
+	SSLMode     string
+	TimeZone    string
+	TablePrefix string `mapstructure:"table_prefix"`
 }
 
 type RedisConfig struct {

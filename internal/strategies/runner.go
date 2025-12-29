@@ -25,7 +25,7 @@ type StrategyRunner interface {
 // ConditionOrderRunner 是条件单的具体执行逻辑
 type ConditionOrderRunner struct {
 	strategyID uint                       // 策略 ID (数据库主键)
-	symbol     string                     // 合约代码
+	instrumentID     string                     // 合约代码
 	cfg        model.ConditionOrderConfig // 解析后的配置参数
 	triggered  bool                       // 运行时状态：是否已经触发过
 }
@@ -40,7 +40,7 @@ func NewConditionOrderRunner(strategy model.Strategy) (*ConditionOrderRunner, er
 
 	return &ConditionOrderRunner{
 		strategyID: strategy.ID,
-		symbol:     strategy.Symbol,
+		instrumentID:     strategy.InstrumentID,
 		cfg:        cfg,
 		triggered:  false, // 初始状态未触发
 	}, nil
@@ -101,19 +101,26 @@ func (r *ConditionOrderRunner) OnTick(price float64) *infra.Command {
 			offset = "1"
 		}
 
-		// 组装下单指令，严格遵循统一协议
+		// 组装下单指令，严格遵循 CThostFtdcInputOrderField 协议
+		orderRef := fmt.Sprintf("st%04d%d", r.strategyID, time.Now().Unix()%100000)
 		return &infra.Command{
 			Type: "INSERT_ORDER",
 			Payload: map[string]interface{}{
-				"symbol":      r.symbol,
-				"direction":   direction,
-				"offset":      offset,
-				"volume":      r.cfg.Volume,
-				"price":       price,
-				"order_ref":   fmt.Sprintf("strat-%d", r.strategyID),
-				"strategy_id": r.strategyID,
+				"InstrumentID":        r.instrumentID,
+				"OrderRef":            orderRef,
+				"Direction":           direction,
+				"CombOffsetFlag":      offset,
+				"CombHedgeFlag":       "1",   // '1' 投机
+				"LimitPrice":          price, // 这里使用的是触发时的市场价
+				"VolumeTotalOriginal": r.cfg.Volume,
+				"OrderPriceType":      "2", // '2' 限价
+				"TimeCondition":       "3", // '3' 当日有效
+				"VolumeCondition":     "1", // '1' 任意数量
+				"ContingentCondition": "1", // '1' 立即
+				"ForceCloseReason":    "0", // '0' 非强平
+				"StrategyID":         r.strategyID,
 			},
-			RequestID: fmt.Sprintf("strat-%d-%v", r.strategyID, timeNowUnix()),
+			RequestID: orderRef,
 		}
 	}
 

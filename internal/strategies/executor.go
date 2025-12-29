@@ -69,10 +69,10 @@ func (e *Executor) LoadActiveStrategies() {
 		}
 
 		// 将 Runner 注册到对应的 Symbol 列表下
-		if e.runners[s.Symbol] == nil {
-			e.runners[s.Symbol] = make([]StrategyRunner, 0)
+		if e.runners[s.InstrumentID] == nil {
+			e.runners[s.InstrumentID] = make([]StrategyRunner, 0)
 		}
-		e.runners[s.Symbol] = append(e.runners[s.Symbol], runner)
+		e.runners[s.InstrumentID] = append(e.runners[s.InstrumentID], runner)
 		count++
 	}
 

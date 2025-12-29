@@ -22,13 +22,13 @@ func NewTradeHandler(eng *engine.Engine) *TradeHandler {
 
 // OrderRequest payload
 type OrderRequest struct {
-	UserID       string               `json:"user_id"`
-	InstrumentID string               `json:"instrument_id"`
-	Direction    model.OrderDirection `json:"direction"` // 0, 1
-	Offset       model.OrderOffset    `json:"offset"`    // 0, 1, 3, 4
-	Price        float64              `json:"price"`     // Limit price
-	Volume       int                  `json:"volume"`
-	StrategyID   *uint                `json:"strategy_id"` // Optional: for strategy orders
+	UserID       string               `json:"UserID"`
+	InstrumentID string               `json:"InstrumentID"`
+	Direction    model.OrderDirection `json:"Direction"`
+	Offset       model.OrderOffset    `json:"CombOffsetFlag"`
+	Price        float64              `json:"LimitPrice"`
+	Volume       int                  `json:"VolumeTotalOriginal"`
+	StrategyID   *uint                `json:"StrategyID"`
 }
 
 // InsertOrder handles ordinary order placement.
@@ -36,7 +36,7 @@ type OrderRequest struct {
 func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	var req OrderRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
 	// 1. Generate unique OrderRef using timestamp (pure in-memory, fastest)
@@ -47,13 +47,20 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	orderRef := fmt.Sprintf("%06d%06d", timestampPart, microPart)
 
 	// 2. Send Command to CTP FIRST (minimize latency)
+	// Aligned with CThostFtdcInputOrderField
 	cmdPayload := map[string]interface{}{
-		"instrument_id": req.InstrumentID,
-		"price":         req.Price,
-		"volume":        req.Volume,
-		"direction":    string(req.Direction),
-		"offset":       string(req.Offset),
-		"order_ref":    orderRef,
+		"InstrumentID":        req.InstrumentID,
+		"OrderRef":            orderRef,
+		"Direction":           string(req.Direction),
+		"CombOffsetFlag":      string(req.Offset),
+		"CombHedgeFlag":       "1", // '1' is Speculation (投机)
+		"LimitPrice":          req.Price,
+		"VolumeTotalOriginal": req.Volume,
+		"OrderPriceType":      "2", // '2' is LimitPrice (限价)
+		"TimeCondition":       "3", // '3' is GFD (当日有效)
+		"VolumeCondition":     "1", // '1' is any volume (任意数量)
+		"ContingentCondition": "1", // '1' is immediately (立即触发)
+		"ForceCloseReason":    "0", // '0' is not force close (非强平)
 	}
 
 	tradeCmd := infra.Command{
@@ -63,22 +70,22 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	}
 
 	if err := h.eng.SendCommand(context.Background(), tradeCmd); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to send order to gateway"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to send order to gateway"})
 	}
 
 	// 3. Write to DB asynchronously (non-blocking)
 	// Even if DB write fails, CTP will send back RTN_ORDER which will create/update the record
 	go func() {
 		order := model.Order{
-			UserID:       req.UserID,
-			InstrumentID: req.InstrumentID,
-			Direction:    req.Direction,
-			Offset:       req.Offset,
-			Price:        req.Price,
-			Volume:       req.Volume,
-			Status:       model.OrderStatusSent, // Already sent to CTP
-			OrderRef:     orderRef,
-			StrategyID:   req.StrategyID,
+			UserID:              req.UserID,
+			InstrumentID:        req.InstrumentID,
+			Direction:           req.Direction,
+			CombOffsetFlag:      req.Offset,
+			LimitPrice:          req.Price,
+			VolumeTotalOriginal: req.Volume,
+			OrderStatus:         model.OrderStatusSent,
+			OrderRef:            orderRef,
+			StrategyID:          req.StrategyID,
 		}
 
 		db := h.eng.GetPostgresClient().DB
@@ -92,9 +99,9 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 
 	// 4. Return immediately (ultra-low latency response)
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"message":    "Order sent",
-		"order_ref":  orderRef,
-		"request_id": orderRef,
+		"Message":   "Order sent",
+		"OrderRef":  orderRef,
+		"RequestID": orderRef,
 	})
 }
 
@@ -107,7 +114,7 @@ func (h *TradeHandler) GetPositions(c *fiber.Ctx) error {
 	// Query from Local DB (Synchronized from CTP)
 	db := h.eng.GetPostgresClient().DB
 	if err := db.Where("user_id = ?", userID).Find(&positions).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch positions"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch positions"})
 	}
 
 	return c.JSON(positions)
@@ -125,7 +132,7 @@ func (h *TradeHandler) GetOrders(c *fiber.Ctx) error {
 
 	// Order by time desc
 	if err := db.Where("user_id = ?", userID).Order("created_at desc").Limit(50).Find(&orders).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch orders"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch orders"})
 	}
 
 	return c.JSON(orders)
@@ -137,7 +144,7 @@ func (h *TradeHandler) SyncPositions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	symbol := c.Query("symbol")
 	if err := h.eng.QueryPositions(userID, symbol); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to trigger position sync"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger position sync"})
 	}
 	return c.SendStatus(fiber.StatusAccepted)
 }
@@ -147,7 +154,7 @@ func (h *TradeHandler) SyncPositions(c *fiber.Ctx) error {
 func (h *TradeHandler) SyncAccount(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	if err := h.eng.QueryAccount(userID); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to trigger account sync"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger account sync"})
 	}
 	return c.SendStatus(fiber.StatusAccepted)
 }
@@ -160,28 +167,29 @@ func (h *TradeHandler) CancelOrder(c *fiber.Ctx) error {
 
 	var order model.Order
 	if err := db.First(&order, orderID).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Order not found"})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"Error": "Order not found"})
 	}
 
 	// Only cancelable if not already terminal
-	if order.Status == model.OrderStatusAllTraded || order.Status == model.OrderStatusCanceled || order.Status == model.OrderStatusNoTradeNotQueueing {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Order already in terminal state"})
+	if order.OrderStatus == model.OrderStatusAllTraded || order.OrderStatus == model.OrderStatusCanceled || order.OrderStatus == model.OrderStatusNoTradeNotQueueing {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Order already in terminal state"})
 	}
 
 	cmd := infra.Command{
 		Type: "CANCEL_ORDER",
 		Payload: map[string]interface{}{
-			"instrument_id": order.InstrumentID,
-			"order_ref":     order.OrderRef, // We used OrderRef
-			// "front_id": order.FrontID, // These should be saved when RTN_ORDER comes back
-			// "session_id": order.SessionID,
+			"InstrumentID": order.InstrumentID,
+			"OrderRef":     order.OrderRef,
+			"FrontID":      order.FrontID,
+			"SessionID":    order.SessionID,
+			"ActionFlag":   "0", // '0' is Delete (撤单)
 		},
 		RequestID: "cancel-" + order.OrderRef,
 	}
 
 	if err := h.eng.SendCommand(context.Background(), cmd); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to send cancel command"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to send cancel command"})
 	}
 
-	return c.JSON(fiber.Map{"message": "Cancel request sent"})
+	return c.JSON(fiber.Map{"Message": "Cancel request sent"})
 }

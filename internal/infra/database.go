@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 	"hhwtrade.com/internal/config"
 	"hhwtrade.com/internal/model"
 )
@@ -18,7 +19,13 @@ func NewPostgresClient(cfg config.DatabaseConfig) (*PostgresClient, error) {
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
 		cfg.Host, cfg.User, cfg.Password, cfg.DBName, cfg.Port, cfg.SSLMode, cfg.TimeZone)
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{
+			TablePrefix:   cfg.TablePrefix,
+			SingularTable: false,
+			// NoLowerCase:   true, // Preserve PascalCase for columns
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -28,12 +35,12 @@ func NewPostgresClient(cfg config.DatabaseConfig) (*PostgresClient, error) {
 	// Auto Migrate
 	if err := db.AutoMigrate(
 		&model.User{},
-		&model.UserSubscription{},
-		&model.FuturesContract{},
+		&model.Subscription{},
+		&model.Future{},
 		&model.Strategy{},
 		&model.Order{},
-		&model.TradeRecord{},
-		&model.OrderStatusLog{},
+		&model.Trade{},
+		&model.OrderLog{},
 		&model.Position{},
 	); err != nil {
 		log.Printf("Warning: AutoMigrate failed: %v", err)

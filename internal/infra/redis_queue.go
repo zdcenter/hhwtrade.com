@@ -24,16 +24,16 @@ const (
 
 // TradeResponse represents the message sent from CTP Core to Go.
 type TradeResponse struct {
-	Type      string      `json:"type"`       // "RTN_ORDER", "RTN_TRADE", "ERR_ORDER"
-	Payload   interface{} `json:"payload"`    // Dynamic content (Order status, Trade details)
-	RequestID string      `json:"request_id"` // Matches the UUID sent in TradeCommand
+	Type      string      `json:"Type"`       // "RTN_ORDER", "RTN_TRADE", "ERR_ORDER"
+	Payload   interface{} `json:"Payload"`    // Dynamic content (Order status, Trade details)
+	RequestID string      `json:"RequestID"` // Matches the UUID sent in TradeCommand
 }
 
 // Command represents a unified instruction sent from Go to CTP Core.
 type Command struct {
-	Type      string                 `json:"type"`       // Big uppercase, e.g., "SUBSCRIBE", "INSERT_ORDER"
-	RequestID string                 `json:"request_id"` // Optional/Query mandatory
-	Payload   map[string]interface{} `json:"payload"`    // All parameters here
+	Type      string                 `json:"Type"`       // Big uppercase, e.g., "SUBSCRIBE", "INSERT_ORDER"
+	RequestID string                 `json:"RequestID"` // Optional/Query mandatory
+	Payload   map[string]interface{} `json:"Payload"`    // All parameters here
 }
 
 // SendCommand pushes a unified command to the Redis list for CTP Core to consume.

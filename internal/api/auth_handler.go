@@ -33,34 +33,34 @@ func NewAuthHandler(db *gorm.DB, cfg *config.Config) *AuthHandler {
 }
 
 type LoginRequest struct {
-	Username string `json:"username"` // Optional if email is provided
-	Email    string `json:"email"`    // Primary login identifier
-	Password string `json:"password"`
+	Username string `json:"Username"`
+	Email    string `json:"Email"`
+	Password string `json:"Password"`
 }
 
 type RegisterRequest struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Username string `json:"Username"`
+	Email    string `json:"Email"`
+	Password string `json:"Password"`
 }
 
 type AuthResponse struct {
-	Token    string `json:"token"`
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email"`	
-	Role     string `json:"role"`
+	Token    string `json:"Token"`
+	ID       uint   `json:"ID"`
+	Username string `json:"Username"`
+	Email    string `json:"Email"`
+	Role     string `json:"Role"`
 }
 
 // Register creates a new user (default role: user)
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var req RegisterRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request"})
 	}
 
 	if req.Email == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email is required"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Email is required"})
 	}
 	// Fallback: Use Email as Username if Username is empty (since Username is secondary)
 	if req.Username == "" {
@@ -69,7 +69,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Crypto error"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Crypto error"})
 	}
 
 	user := model.User{
@@ -81,17 +81,17 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.Create(&user).Error; err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Username or Email already exists"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Username or Email already exists"})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": "User registered successfully"})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"Message": "User registered successfully"})
 }
 
 // Login authenticates user and returns JWT
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var req LoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request"})
 	}
 
 	// Determine login identifier (prioritize Email, fallback to Username)
@@ -101,17 +101,17 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	}
 
 	if loginID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email or Username is required"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Email or Username is required"})
 	}
 
 	var user model.User
 	// Support login by Username OR Email
 	if err := h.db.Where("email = ? OR username = ?", loginID, loginID).First(&user).Error; err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"Error": "Invalid credentials"})
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"Error": "Invalid credentials"})
 	}
 
 	// Generate JWT
@@ -126,7 +126,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 
 	t, err := token.SignedString(h.jwtSecret)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to sign token"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to sign token"})
 	}
 
 	return c.JSON(AuthResponse{
@@ -165,21 +165,21 @@ func (h *AuthHandler) GetMe(c *fiber.Ctx) error {
 	// The middleware injects "id" into Locals
 	userID := c.Locals("id")
 	if userID == nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"Error": "Unauthorized"})
 	}
 
 	var user model.User
 	if err := h.db.First(&user, userID).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"Error": "User not found"})
 	}
 
 	return c.JSON(fiber.Map{
-		"id":         user.ID,
-		"username":   user.Username,
-		"email":      user.Email,
-		"role":       user.Role,
-		"is_active":  user.IsActive,
-		"created_at": user.CreatedAt,
+		"ID":         user.ID,
+		"Username":   user.Username,
+		"Email":      user.Email,
+		"Role":       user.Role,
+		"IsActive":   user.IsActive,
+		"CreatedAt":  user.CreatedAt,
 	})
 }
 
@@ -188,6 +188,6 @@ func (h *AuthHandler) Logout(c *fiber.Ctx) error {
 	// In a stateless JWT system, the server doesn't "delete" the token unless we use a blacklist in Redis.
 	// For now, we just return success.
 	return c.JSON(fiber.Map{
-		"message": "Logged out successfully",
+		"Message": "Logged out successfully",
 	})
 }

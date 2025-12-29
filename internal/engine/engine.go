@@ -146,16 +146,16 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 	case "RTN_ORDER":
 		// Order Status Update
 		// Payload: {"status": "1", "order_sys_id": "12345", "error_msg": ""}
-		statusStr, _ := payload["status"].(string)
-		orderSysID, _ := payload["order_sys_id"].(string)
-		errorMsg, _ := payload["error_msg"].(string)
+		statusStr, _ := payload["OrderStatus"].(string)
+		orderSysID, _ := payload["OrderSysID"].(string)
+		errorMsg, _ := payload["StatusMsg"].(string)
 		
 		var order model.Order
 		if err := db.Where("order_ref = ?", resp.RequestID).First(&order).Error; err == nil {
 			// Record Log
-			db.Create(&model.OrderStatusLog{
+			db.Create(&model.OrderLog{
 				OrderID:   order.ID,
-				OldStatus: string(order.Status),
+				OldStatus: string(order.OrderStatus),
 				NewStatus: statusStr,
 				Message:   errorMsg,
 				CreatedAt: time.Now(),
@@ -163,13 +163,13 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 
 			updates := map[string]interface{}{}
 			if statusStr != "" {
-				updates["status"] = statusStr
+				updates["OrderStatus"] = statusStr
 			}
 			if orderSysID != "" {
-				updates["order_sys_id"] = orderSysID
+				updates["OrderSysID"] = orderSysID
 			}
 			if errorMsg != "" {
-				updates["error_msg"] = errorMsg
+				updates["StatusMsg"] = errorMsg
 			}
 
 			if len(updates) > 0 {
@@ -185,33 +185,34 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 
 		var order model.Order
 		if err := db.Where("order_ref = ?", resp.RequestID).First(&order).Error; err == nil {
-			tradeVol, _ := payload["volume"].(float64) 
-			price, _ := payload["price"].(float64)
-			tradeID, _ := payload["trade_id"].(string)
+			tradeVol, _ := payload["Volume"].(float64) 
+			price, _ := payload["Price"].(float64)
+			tradeID, _ := payload["TradeID"].(string)
 
 			// 1. Insert Trade Record
-				db.Create(&model.TradeRecord{
+				db.Create(&model.Trade{
 				OrderID:      order.ID,
-				TicketNo:     order.OrderRef,
+				OrderRef:     order.OrderRef,
+				OrderSysID:   order.OrderSysID,
 				TradeID:      tradeID,
 				InstrumentID: order.InstrumentID,
 				Direction:    string(order.Direction),
-				Offset:       string(order.Offset),
-				Price:     price,
-				Volume:    int(tradeVol),
-				TradeTime: time.Now().Format("15:04:05"), 
+				OffsetFlag:   string(order.CombOffsetFlag),
+				Price:        price,
+				Volume:       int(tradeVol),
+				TradeTime:    time.Now().Format("15:04:05"), 
 			})
 
 			// 2. Partial Fill Logic
-			newFilledVol := order.FilledVolume + int(tradeVol)
+			newFilledVol := order.VolumeTraded + int(tradeVol)
 			updates := map[string]interface{}{
-				"filled_volume": newFilledVol,
+				"VolumeTraded": newFilledVol,
 			}
 
-			if newFilledVol >= order.Volume {
-				updates["status"] = model.OrderStatusAllTraded
+			if newFilledVol >= order.VolumeTotalOriginal {
+				updates["OrderStatus"] = model.OrderStatusAllTraded
 			} else {
-				updates["status"] = model.OrderStatusPartTradedQueueing
+				updates["OrderStatus"] = model.OrderStatusPartTradedQueueing
 			}
 
 			db.Model(&order).Updates(updates)
@@ -222,26 +223,26 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 			// 4. Notify user
 			e.websocketHub.PushToUser(order.UserID, resp)
 		}
-		log.Printf("Trade for %s: Volume %v", resp.RequestID, payload["volume"])
+		log.Printf("Trade for %s: Volume %v", resp.RequestID, payload["Volume"])
 
 	case "ERR_ORDER":
 		// Immediate Rejection
-		errorMsg, _ := payload["error_msg"].(string)
+		errorMsg, _ := payload["ErrorMsg"].(string)
 		
 		var order model.Order
 		if db.Where("order_ref = ?", resp.RequestID).First(&order).Error == nil {
 			// Log Rejection
-			db.Create(&model.OrderStatusLog{
+			db.Create(&model.OrderLog{
 				OrderID:   order.ID,
-				OldStatus: string(order.Status),
+				OldStatus: string(order.OrderStatus),
 				NewStatus: string(model.OrderStatusNoTradeNotQueueing), // Rejected/Failed
 				Message:   errorMsg,
 				CreatedAt: time.Now(),
 			})
 
 			db.Model(&order).Updates(map[string]interface{}{
-				"status":    model.OrderStatusNoTradeNotQueueing,
-				"error_msg": errorMsg,
+				"OrderStatus": model.OrderStatusNoTradeNotQueueing,
+				"StatusMsg":   errorMsg,
 			})
 			e.websocketHub.PushToUser(order.UserID, resp)
 		}
@@ -249,7 +250,7 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 	case "QRY_POS_RSP":
 		// This is a response to a position query command
 		// Payload: {"positions": []model.Position}
-		if positions, ok := payload["positions"].([]interface{}); ok {
+		if positions, ok := payload["Positions"].([]interface{}); ok {
 			for _, p := range positions {
 				pBytes, _ := json.Marshal(p)
 				var pos model.Position
@@ -262,12 +263,12 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 
 	case "QRY_INSTRUMENT_RSP":
 		// This is a response to an instrument query command
-		// Payload: {"instruments": []model.FuturesContract}
+		// Payload: {"instruments": []model.Future}
 		log.Printf("Received QRY_INSTRUMENT_RSP: %v", payload)	
-		if instruments, ok := payload["instruments"].([]interface{}); ok {
+		if instruments, ok := payload["Instruments"].([]interface{}); ok {
 			for _, inst := range instruments {
 				instBytes, _ := json.Marshal(inst)
-				var instrument model.FuturesContract
+				var instrument model.Future
 				if err := json.Unmarshal(instBytes, &instrument); err == nil {
 					// Upsert instrument data
 					db.Save(&instrument)
@@ -282,53 +283,63 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 func (e *Engine) updatePosition(order model.Order, tradePayload map[string]interface{}) {
 	db := e.pg.DB
 
-	// Determine direction for Position model ("long" or "short")
-	// Note: CTP typically separates Long and Short positions for the same InstrumentID.
-	posDir := "long"
-	if order.Direction == model.DirectionSell && order.Offset == model.OffsetOpen {
-		posDir = "short"
-	} else if order.Direction == model.DirectionBuy && (order.Offset == model.OffsetClose || order.Offset == model.OffsetCloseToday) {
-		posDir = "short"
+	// Determine PosiDirection: '2' Long, '3' Short
+	posiDir := "2" // Default to Long
+	if order.Direction == model.DirectionBuy {
+		if order.CombOffsetFlag != model.OffsetOpen {
+			posiDir = "3" // Buy Close -> belongs to Short side
+		}
+	} else {
+		if order.CombOffsetFlag == model.OffsetOpen {
+			posiDir = "3" // Sell Open -> belongs to Short side
+		}
 	}
 
 	var pos model.Position
-	err := db.Where("user_id = ? AND instrument_id = ? AND direction = ?", order.UserID, order.InstrumentID, posDir).First(&pos).Error
+	err := db.Where("user_id = ? AND instrument_id = ? AND posi_direction = ?", order.UserID, order.InstrumentID, posiDir).First(&pos).Error
 
-	tradeVol := order.Volume // In a real system, use volume from tradePayload if partial fill
-	tradePrice, _ := tradePayload["price"].(float64)
+	tradeVol, _ := tradePayload["Volume"].(float64) // Get actual traded volume from CTP payload
+	tradePrice, _ := tradePayload["Price"].(float64)
 
 	if err != nil {
 		// New position
-		if order.Offset == model.OffsetOpen {
+		if order.CombOffsetFlag == model.OffsetOpen {
 			pos = model.Position{
-				UserID:       order.UserID,
-				InstrumentID: order.InstrumentID,
-				Direction:    posDir,
-				TotalVolume:  tradeVol,
-				TodayVolume:  tradeVol,
-				AveragePrice: tradePrice,
+				UserID:        order.UserID,
+				InstrumentID:  order.InstrumentID,
+				PosiDirection: posiDir,
+				Position:      int(tradeVol),
+				TodayPosition: int(tradeVol),
+				AveragePrice:  tradePrice,
+				PositionCost:  tradePrice * tradeVol, // Initial cost
 				UpdatedAt:    time.Now(),
 			}
 			db.Create(&pos)
 		}
 	} else {
 		// Existing position
-		if order.Offset == model.OffsetOpen {
+		if order.CombOffsetFlag == model.OffsetOpen {
 			// Increase position and recalculate average price
-			newTotal := pos.TotalVolume + tradeVol
-			pos.AveragePrice = (pos.AveragePrice*float64(pos.TotalVolume) + tradePrice*float64(tradeVol)) / float64(newTotal)
-			pos.TotalVolume = newTotal
-			pos.TodayVolume += tradeVol
+			newTotal := pos.Position + int(tradeVol)
+			// Recalculate AveragePrice based on cost
+			pos.PositionCost += tradePrice * tradeVol
+			pos.AveragePrice = pos.PositionCost / float64(newTotal)
+			pos.Position = newTotal
+			pos.TodayPosition += int(tradeVol)
 		} else {
 			// Decrease position
-			pos.TotalVolume -= tradeVol
-			if pos.TotalVolume < 0 {
-				pos.TotalVolume = 0 // Safety check
+			pos.Position -= int(tradeVol)
+			if pos.Position < 0 {
+				pos.Position = 0
 			}
-			// Note: TodayVolume logic depends on whether it's SHFE (CloseToday) or others
-			if order.Offset == model.OffsetCloseToday {
-				pos.TodayVolume -= tradeVol
+			// SHFE CloseToday logic
+			if order.CombOffsetFlag == model.OffsetCloseToday {
+				pos.TodayPosition -= int(tradeVol)
+			} else {
+				pos.YdPosition -= int(tradeVol)
 			}
+			if pos.TodayPosition < 0 { pos.TodayPosition = 0 }
+			if pos.YdPosition < 0 { pos.YdPosition = 0 }
 		}
 		pos.UpdatedAt = time.Now()
 		db.Save(&pos)
@@ -340,8 +351,8 @@ func (e *Engine) QueryPositions(userID string, instrumentID string) error {
 	cmd := infra.Command{
 		Type: "QUERY_POSITIONS",
 		Payload: map[string]interface{}{
-			"user_id": userID,
-			"instrument_id":  instrumentID,
+			"InvestorID":   userID,
+			"InstrumentID": instrumentID,
 		},
 		RequestID: "query-pos-" + time.Now().Format("20060102150405"),
 	}
@@ -353,7 +364,7 @@ func (e *Engine) QueryAccount(userID string) error {
 	cmd := infra.Command{
 		Type: "QUERY_ACCOUNT",
 		Payload: map[string]interface{}{
-			"user_id": userID,
+			"InvestorID": userID,
 		},
 		RequestID: "query-acc-" + time.Now().Format("20060102150405"),
 	}
@@ -385,7 +396,7 @@ func (e *Engine) SubscribeSymbol(instrumentID string) error {
 		cmd := infra.Command{
 			Type: "SUBSCRIBE",
 			Payload: map[string]interface{}{
-				"instrument_id": instrumentID,
+				"InstrumentID": instrumentID,
 			},
 			RequestID: "sub-" + instrumentID + "-" + time.Now().Format("20060102150405"),
 		}
@@ -401,7 +412,7 @@ func (e *Engine) UnsubscribeSymbol(instrumentID string) error {
 		cmd := infra.Command{
 			Type: "UNSUBSCRIBE",
 			Payload: map[string]interface{}{
-				"instrument_id": instrumentID,
+				"InstrumentID": instrumentID,
 			},
 			RequestID: "unsub-" + instrumentID + "-" + time.Now().Format("20060102150405"),
 		}

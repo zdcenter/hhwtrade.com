@@ -25,30 +25,20 @@ const (
 
 // Strategy represents a user's running strategy instance.
 type Strategy struct {
-	ID     uint   `gorm:"primaryKey" json:"id"`
-	UserID string `gorm:"index" json:"user_id"`
-
-	// Strategy Logic Type
-	Type StrategyType `json:"type"`
-
-	// Target Symbol
-	Symbol string `gorm:"index" json:"symbol"`
-
-	// Lifecycle Status
-	Status StrategyStatus `json:"status"`
-
-	// Dynamic Configuration (JSON)
-	// Example for ConditionOrder: {"trigger_price": 3000, "operator": ">", "action": "open_long", "volume": 1}
-	Config json.RawMessage `gorm:"type:jsonb" json:"config"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint           `gorm:"primaryKey" json:"ID"`
+	UserID    string         `gorm:"index" json:"UserID"`
+	Type      StrategyType   `json:"Type"`
+	InstrumentID string      `gorm:"index" json:"InstrumentID"`
+	Status    StrategyStatus `json:"Status"`
+	Config    json.RawMessage `gorm:"type:jsonb" json:"Config"`
+	CreatedAt time.Time      `json:"CreatedAt"`
+	UpdatedAt time.Time      `json:"UpdatedAt"`
 }
 
 // ConditionOrderConfig defines the configuration structure for a basic condition order strategy.
 type ConditionOrderConfig struct {
-	TriggerPrice float64 `json:"trigger_price"` // Trigger Price
-	Operator     string  `json:"operator"`      // ">", ">=", "<", "<="
-	Action       string  `json:"action"`        // "open_long", "close_long", "open_short", "close_short"
-	Volume       int     `json:"volume"`        // Volume to trade
+	TriggerPrice float64 `json:"TriggerPrice"`
+	Operator     string  `json:"Operator"`
+	Action       string  `json:"Action"`
+	Volume       int     `json:"Volume"`
 }

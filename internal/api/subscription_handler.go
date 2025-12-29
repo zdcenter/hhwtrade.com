@@ -36,26 +36,26 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 
 	offset := (page - 1) * pageSize
 
-	var subs []model.UserSubscription
+	var subs []model.Subscription
 	var total int64
 
 	db := h.eng.GetPostgresClient().DB
 
 	// Count total records
-	if err := db.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to count subscriptions"})
+	if err := db.Model(&model.Subscription{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to count subscriptions"})
 	}
 
 	// Fetch paginated data
 	if err := db.Where("user_id = ?", userID).Order("sorter ASC").Limit(pageSize).Offset(offset).Find(&subs).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch subscriptions"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch subscriptions"})
 	}
 
 	return c.JSON(fiber.Map{
-		"total":    total,
-		"page":     page,
-		"pageSize": pageSize,
-		"data":     subs,
+		"Total":    total,
+		"Page":     page,
+		"PageSize": pageSize,
+		"Data":     subs,
 	})
 }
 
@@ -64,15 +64,15 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	var req struct {
-		InstrumentID string `json:"instrument_id"`
-		ExchangeID   string `json:"exchange_id"`
+		InstrumentID string `json:"InstrumentID"`
+		ExchangeID   string `json:"ExchangeID"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
-	sub := model.UserSubscription{
+	sub := model.Subscription{
 		UserID:       userID,
 		InstrumentID: req.InstrumentID,
 		ExchangeID:   req.ExchangeID,
@@ -81,7 +81,7 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	db := h.eng.GetPostgresClient().DB
 	// Use FirstOrCreate to avoid duplicates if unique index is hit, or handle error
 	if err := db.Create(&sub).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to add subscription", "details": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to add subscription", "Details": err.Error()})
 	}
 
 	// Trigger WebSocket Subscription
@@ -102,14 +102,13 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	instrumentID := c.Params("symbol") // 保持 URL param 名为 symbol 也可以，只要逻辑对
 
 	db := h.eng.GetPostgresClient().DB
-	result := db.Where("user_id = ? AND instrument_id = ?", userID, instrumentID).Delete(&model.UserSubscription{})
+	result := db.Where("user_id = ? AND instrument_id = ?", userID, instrumentID).Delete(&model.Subscription{})
 
 	if result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to remove subscription"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to remove subscription"})
 	}
-
 	if result.RowsAffected == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Subscription not found"})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"Error": "Subscription not found"})
 	}
 
 	// Trigger WebSocket Unsubscription
@@ -122,9 +121,9 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 
 	// --- 修改这里 ---
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"status":  true,
-		"message": "Unsubscribed successfully",
-		"instrument_id": instrumentID,
+		"Status":       true,
+		"Message":      "Unsubscribed successfully",
+		"InstrumentID": instrumentID,
 	})
 }
 
@@ -134,10 +133,10 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
 	query := c.Query("q")
 	if query == "" {
-		return c.JSON([]model.FuturesContract{})
+		return c.JSON([]model.Future{})
 	}
 
-	var instruments []model.FuturesContract
+	var instruments []model.Future
 	db := h.eng.GetPostgresClient().DB
 
 	// Priority Search:
@@ -145,11 +144,11 @@ func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
 	// 2. Exact match on ProductID (e.g. rb)
 	// 3. Fuzzy match on Name
 	searchTerm := query + "%"
-	if err := db.Model(&model.FuturesContract{}).Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
+	if err := db.Model(&model.Future{}).Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
 		Order("instrument_id ASC").
 		Limit(50).
 		Find(&instruments).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to search instruments"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to search instruments"})
 	}
 
 	return c.JSON(instruments)
@@ -159,16 +158,16 @@ func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
 // POST /api/instruments/sync
 func (h *SubscriptionHandler) SyncInstruments(c *fiber.Ctx) error {
 	if err := h.eng.SyncInstruments(); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to trigger instrument sync"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger instrument sync"})
 	}
-	return c.JSON(fiber.Map{"message": "Instrument synchronization triggered"})
+	return c.JSON(fiber.Map{"Message": "Instrument synchronization triggered"})
 }
 
 
 func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	var req struct {
-		Symbols []string `json:"symbols"`
+		InstrumentIDs []string `json:"InstrumentIDs"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -178,9 +177,9 @@ func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
   db := h.eng.GetPostgresClient().DB
     // 开启事务批量更新排序号
     err := db.Transaction(func(tx *gorm.DB) error {
-        for i, symbol := range req.Symbols {
-            if err := tx.Model(&model.UserSubscription{}).
-                Where("user_id = ? AND symbol = ?", userID, symbol).
+        for i, symbol := range req.InstrumentIDs {
+            if err := tx.Model(&model.Subscription{}).
+                Where("user_id = ? AND instrument_id = ?", userID, symbol).
                 Update("sorter", i).Error; err != nil {
                 return err
             }
@@ -189,7 +188,7 @@ func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
     })
     
     if err != nil {
-        return c.Status(500).JSON(fiber.Map{"error": "Failed to reorder"})
+        return c.Status(500).JSON(fiber.Map{"Error": "Failed to reorder"})
     }
-    return c.JSON(fiber.Map{"status": true})
-}	
+    return c.JSON(fiber.Map{"Status": true})
+}

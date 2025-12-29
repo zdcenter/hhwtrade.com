@@ -13,21 +13,28 @@ const (
 	DirectionSell OrderDirection = "1" // 卖
 )
 
-// OrderOffset defines the open/close status.
+// BaseModel provides standard fields with PascalCase JSON tags for CTP/Frontend consistency
+type BaseModel struct {
+	ID        uint           `gorm:"primaryKey" json:"ID"`
+	CreatedAt time.Time      `json:"CreatedAt"`
+	UpdatedAt time.Time      `json:"UpdatedAt"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"DeletedAt,omitempty"`
+}
+
+// OrderOffset defines the open/close status (CombOffsetFlag in CTP)
 type OrderOffset string
 
 const (
 	OffsetOpen           OrderOffset = "0" // 开仓
 	OffsetClose          OrderOffset = "1" // 平仓
-	OffsetCloseToday     OrderOffset = "3" // 平今 (上海期货交易所特有)
-	OffsetCloseYesterday OrderOffset = "4" // 平昨 (上海期货交易所特有)
+	OffsetCloseToday     OrderOffset = "3" // 平今
+	OffsetCloseYesterday OrderOffset = "4" // 平昨
 )
 
-// OrderStatus defines the lifecycle status of an order.
+// OrderStatus defines the lifecycle status of an order (OrderStatus in CTP)
 type OrderStatus string
 
 const (
-	// CTP 标准状态 (TThostFtdcOrderStatusType)
 	OrderStatusAllTraded                OrderStatus = "0" // 全部成交
 	OrderStatusPartTradedQueueing       OrderStatus = "1" // 部分成交还在队列中
 	OrderStatusPartTradedNotQueueing    OrderStatus = "2" // 部分成交不在队列中
@@ -37,66 +44,84 @@ const (
 	OrderStatusUnknown                  OrderStatus = "a" // 未知
 	OrderStatusNotTouched               OrderStatus = "b" // 尚未触发
 	OrderStatusTouched                  OrderStatus = "c" // 已触发
-
-	// 内部自定义中间状态 (Internal States)
-	OrderStatusPending OrderStatus = "P" // 待入库 (Pending)
-	OrderStatusSent    OrderStatus = "S" // 已发送至 CTP (Sent)
+	OrderStatusPending                  OrderStatus = "P" // 内部状态: 待处理
+	OrderStatusSent                     OrderStatus = "S" // 内部状态: 已发送
 )
 
-// Order represents a trade order record in the system.
+// Order aligns with CThostFtdcOrderField
 type Order struct {
-	gorm.Model
-	UserID       string         `gorm:"index;not null" json:"user_id"`
-	InstrumentID string         `gorm:"index;not null" json:"instrument_id"` // 改为 InstrumentID
-	Direction    OrderDirection `gorm:"type:varchar(1);not null" json:"direction"`
-	Offset       OrderOffset    `gorm:"type:varchar(1);not null" json:"offset"`
-	Price        float64        `gorm:"not null" json:"price"`
-	Volume       int            `gorm:"not null" json:"volume"`
-	FilledVolume int            `gorm:"default:0" json:"filled_volume"`
-	Status       OrderStatus    `gorm:"type:varchar(1);index;default:'0'" json:"status"`
+	BaseModel
+	UserID       string `gorm:"index" json:"UserID"`
+	InvestorID   string `json:"InvestorID"`
+	InstrumentID string `gorm:"index" json:"InstrumentID"`
+	ExchangeID   string `json:"ExchangeID"`
+	OrderRef     string `gorm:"uniqueIndex" json:"OrderRef"`
+
+	Direction      OrderDirection `gorm:"type:varchar(1)" json:"Direction"`
+	CombOffsetFlag OrderOffset    `gorm:"type:varchar(1)" json:"CombOffsetFlag"`
+
+	LimitPrice          float64 `json:"LimitPrice"`
+	VolumeTotalOriginal int     `json:"VolumeTotalOriginal"`
+	VolumeTraded        int     `gorm:"default:0" json:"VolumeTraded"`
 	
-	// IDs
-	OrderRef   string `gorm:"uniqueIndex" json:"order_ref"`        // Our local OrderRef
-	OrderSysID string `gorm:"index" json:"order_sys_id"`           // Exchange Order ID
-	StrategyID *uint  `gorm:"index" json:"strategy_id,omitempty"`  // Linked strategy
+	OrderStatus OrderStatus `gorm:"type:varchar(1);index" json:"OrderStatus"`
+	OrderSysID  string      `gorm:"index" json:"OrderSysID"`
+	StatusMsg   string      `json:"StatusMsg"`
 
-	// Error Info
-	ErrorMsg string `json:"error_msg"`
+	FrontID   int `json:"FrontID"`
+	SessionID int `json:"SessionID"`
 
-	// Relations
-	Trades []TradeRecord `gorm:"foreignKey:OrderID" json:"trades,omitempty"`
+	TradingDay string `json:"TradingDay"`
+	InsertDate string `json:"InsertDate"`
+	InsertTime string `json:"InsertTime"`
+
+	StrategyID *uint   `gorm:"index" json:"StrategyID,omitempty"`
+	Trades     []Trade `gorm:"foreignKey:OrderID" json:"Trades,omitempty"`
 }
 
-// TradeRecord represents a specific execution (deal) matched by the exchange.
-type TradeRecord struct {
-	gorm.Model
-	OrderID      uint    `gorm:"index;not null" json:"order_id"`
-	TicketNo     string  `gorm:"index" json:"ticket_no"`         // OrderRef
-	TradeID      string  `gorm:"uniqueIndex" json:"trade_id"`
-	InstrumentID string  `gorm:"index" json:"instrument_id"`      // 改为 InstrumentID
-	Direction    string  `json:"direction"`
-	Offset       string  `json:"offset"`
-	Price        float64 `json:"price"`
-	Volume       int     `json:"volume"`
-	TradeTime    string  `json:"trade_time"`
+// Trade aligns with CThostFtdcTradeField
+type Trade struct {
+	BaseModel
+	OrderID      uint    `gorm:"index" json:"OrderID"`
+	OrderRef     string  `gorm:"index" json:"OrderRef"`
+	OrderSysID   string  `gorm:"index" json:"OrderSysID"`
+	TradeID      string  `gorm:"uniqueIndex" json:"TradeID"`
+	InstrumentID string  `gorm:"index" json:"InstrumentID"`
+	ExchangeID   string  `json:"ExchangeID"`
+	Direction    string  `json:"Direction"`
+	OffsetFlag   string  `json:"OffsetFlag"`
+	Price        float64 `json:"Price"`
+	Volume       int     `json:"Volume"`
+	TradeDate    string  `json:"TradeDate"`
+	TradeTime    string  `json:"TradeTime"`
+	TradingDay   string  `json:"TradingDay"`
 }
 
-// Position represents a user's current holding.
+type OrderLog struct {
+	ID        uint      `gorm:"primaryKey" json:"ID"`
+	OrderID   uint      `gorm:"index;not null" json:"OrderID"`
+	OldStatus string    `json:"OldStatus"`
+	NewStatus string    `json:"NewStatus"`
+	Message   string    `json:"Message"`
+	CreatedAt time.Time `json:"CreatedAt"`
+}
+
+// Position aligns with CThostFtdcInvestorPositionField critical fields
 type Position struct {
-	UserID       string    `gorm:"primaryKey;index" json:"user_id"`
-	InstrumentID string    `gorm:"primaryKey;index" json:"instrument_id"` // 改为 InstrumentID
-	Direction    string    `gorm:"primaryKey" json:"direction"`           // "long" or "short"
-	TotalVolume  int       `json:"total_volume"`
-	TodayVolume  int       `json:"today_volume"`
-	AveragePrice float64   `json:"average_price"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
+	UserID       string `gorm:"primaryKey;index" json:"UserID"`
+	InstrumentID string `gorm:"primaryKey;index" json:"InstrumentID"`
 
-type OrderStatusLog struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	OrderID   uint      `gorm:"index;not null" json:"order_id"`
-	OldStatus string    `json:"old_status"`
-	NewStatus string    `json:"new_status"`
-	Message   string    `json:"message"`
-	CreatedAt time.Time `json:"created_at"`
+	// PosiDirection: '2'多, '3'空 (CTP: THOST_FTDC_PD_Long, THOST_FTDC_PD_Short)
+	PosiDirection string `gorm:"primaryKey" json:"PosiDirection"`
+	HedgeFlag     string `gorm:"primaryKey;default:'1'" json:"HedgeFlag"` // 投机/套保
+
+	Position     int     `json:"Position"`       // 总持仓
+	YdPosition   int     `json:"YdPosition"`    // 昨仓
+	TodayPosition int     `json:"TodayPosition"` // 今仓
+	
+	PositionCost float64 `json:"PositionCost"` // 持仓成本
+	AveragePrice float64 `json:"AveragePrice"` // 均价
+	
+	TradingDay   string    `json:"TradingDay"`
+	UpdatedAt    time.Time `json:"UpdatedAt"`
 }

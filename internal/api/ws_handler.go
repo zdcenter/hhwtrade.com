@@ -11,8 +11,8 @@ import (
 )
 
 type WsRequest struct {
-	Action       string `json:"action"`        // "subscribe", "unsubscribe"
-	InstrumentID string `json:"instrument_id"` // CTP: InstrumentID
+	Action       string `json:"Action"`
+	InstrumentID string `json:"InstrumentID"`
 }
 
 func InitWebsocket(app *fiber.App, eng *engine.Engine) {
@@ -56,7 +56,7 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 		// 3. Auto-subscribe stored symbols (Restore session)
 		if userID != "" {
 			go func() {
-				var subs []model.UserSubscription
+				var subs []model.Subscription
 				db := eng.GetPostgresClient().DB
 				if err := db.Where("user_id = ?", userID).Find(&subs).Error; err == nil {
 					for _, sub := range subs {

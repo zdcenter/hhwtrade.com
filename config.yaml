@@ -10,6 +10,7 @@ database:
   dbname: "systradex"
   sslmode: "disable"
   timezone: "Asia/Shanghai"
+  table_prefix: "future_"
 
 redis:
   addr: "localhost:6379"

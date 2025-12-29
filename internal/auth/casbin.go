@@ -11,8 +11,8 @@ import (
 
 // InitCasbin defines the RBAC model and initializes the enforcer with GORM adapter
 func InitCasbin(db *gorm.DB) (*casbin.Enforcer, error) {
-	// 1. Initialize GORM adapter (creates casbin_rule table)
-	adapter, err := gormadapter.NewAdapterByDB(db)
+	// 1. Initialize GORM adapter with custom PascalCase table name
+	adapter, err := gormadapter.NewAdapterByDBWithCustomTable(db, nil, "casbin_rule")
 	if err != nil {
 		return nil, err
 	}
