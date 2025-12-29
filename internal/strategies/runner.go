@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"hhwtrade.com/internal/infra"
 	"hhwtrade.com/internal/model"
 )
 
@@ -14,8 +13,8 @@ import (
 // 不管是条件单、网格交易还是 CTA 策略，都必须实现这些方法
 type StrategyRunner interface {
 	// OnTick 当收到新的行情数据时被调用
-	// 返回值: 如果需要下单，返回 Command；否则返回 nil
-	OnTick(price float64) *infra.Command
+	// 返回值: 如果需要下单，返回 Order；否则返回 nil
+	OnTick(price float64) *model.Order
 }
 
 // =======================
@@ -24,10 +23,10 @@ type StrategyRunner interface {
 
 // ConditionOrderRunner 是条件单的具体执行逻辑
 type ConditionOrderRunner struct {
-	strategyID uint                       // 策略 ID (数据库主键)
-	instrumentID     string                     // 合约代码
-	cfg        model.ConditionOrderConfig // 解析后的配置参数
-	triggered  bool                       // 运行时状态：是否已经触发过
+	strategyID   uint                       // 策略 ID (数据库主键)
+	instrumentID string                     // 合约代码
+	cfg          model.ConditionOrderConfig // 解析后的配置参数
+	triggered    bool                       // 运行时状态：是否已经触发过
 }
 
 // NewConditionOrderRunner 创建一个新的条件单运行实例
@@ -39,15 +38,15 @@ func NewConditionOrderRunner(strategy model.Strategy) (*ConditionOrderRunner, er
 	}
 
 	return &ConditionOrderRunner{
-		strategyID: strategy.ID,
-		instrumentID:     strategy.InstrumentID,
-		cfg:        cfg,
-		triggered:  false, // 初始状态未触发
+		strategyID:   strategy.ID,
+		instrumentID: strategy.InstrumentID,
+		cfg:          cfg,
+		triggered:    false, // 初始状态未触发
 	}, nil
 }
 
 // OnTick 是策略的核心大脑
-func (r *ConditionOrderRunner) OnTick(price float64) *infra.Command {
+func (r *ConditionOrderRunner) OnTick(price float64) *model.Order {
 	// 1. 如果已经触发过了，就不要再触发了（防止重复下单）
 	if r.triggered {
 		return nil
@@ -82,45 +81,37 @@ func (r *ConditionOrderRunner) OnTick(price float64) *infra.Command {
 		r.triggered = true // 标记为已触发
 
 		// 映射策略 Action 到 CTP 指令字符
-		// CTP 规范: Direction ('0':买, '1':卖), Offset ('0':开, '1':平, '3':平今)
-		direction := "0"
-		offset := "0"
+		direction := model.DirectionBuy
+		offset := model.OffsetOpen
 
 		switch r.cfg.Action {
 		case "open_long":
-			direction = "0"
-			offset = "0"
+			direction = model.DirectionBuy
+			offset = model.OffsetOpen
 		case "close_long":
-			direction = "1"
-			offset = "1"
+			direction = model.DirectionSell
+			offset = model.OffsetClose
 		case "open_short":
-			direction = "1"
-			offset = "0"
+			direction = model.DirectionSell
+			offset = model.OffsetOpen
 		case "close_short":
-			direction = "0"
-			offset = "1"
+			direction = model.DirectionBuy
+			offset = model.OffsetClose
 		}
 
-		// 组装下单指令，严格遵循 CThostFtdcInputOrderField 协议
 		orderRef := fmt.Sprintf("st%04d%d", r.strategyID, time.Now().Unix()%100000)
-		return &infra.Command{
-			Type: "INSERT_ORDER",
-			Payload: map[string]interface{}{
-				"InstrumentID":        r.instrumentID,
-				"OrderRef":            orderRef,
-				"Direction":           direction,
-				"CombOffsetFlag":      offset,
-				"CombHedgeFlag":       "1",   // '1' 投机
-				"LimitPrice":          price, // 这里使用的是触发时的市场价
-				"VolumeTotalOriginal": r.cfg.Volume,
-				"OrderPriceType":      "2", // '2' 限价
-				"TimeCondition":       "3", // '3' 当日有效
-				"VolumeCondition":     "1", // '1' 任意数量
-				"ContingentCondition": "1", // '1' 立即
-				"ForceCloseReason":    "0", // '0' 非强平
-				"StrategyID":         r.strategyID,
-			},
-			RequestID: orderRef,
+		
+		return &model.Order{
+			InstrumentID:        r.instrumentID,
+			OrderRef:            orderRef,
+			Direction:           direction,
+			CombOffsetFlag:      offset,
+			LimitPrice:          price, // 使用触发时的市场/限价
+			VolumeTotalOriginal: r.cfg.Volume,
+			StrategyID:          &r.strategyID,
+			// UserID/InvestorID will be filled by CTP Client or default context
+			// We can leave them empty here if CTP Client handles them, or pass them if Strategy context has them.
+			// Currently Strategy doesn't know UserID. We should probably add UserID to Strategy model/runner.
 		}
 	}
 
@@ -130,3 +121,7 @@ func (r *ConditionOrderRunner) OnTick(price float64) *infra.Command {
 func timeNowUnix() int64 {
 	return time.Now().Unix()
 }
+
+
+
+

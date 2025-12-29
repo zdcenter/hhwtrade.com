@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"gorm.io/gorm"
-	"hhwtrade.com/internal/infra"
 	"hhwtrade.com/internal/model"
 )
 
@@ -80,7 +79,7 @@ func (e *Executor) LoadActiveStrategies() {
 }
 
 // OnMarketData 当收到行情数据时被 Engine 调用
-func (e *Executor) OnMarketData(symbol string, price float64) []*infra.Command {
+func (e *Executor) OnMarketData(symbol string, price float64) []*model.Order {
 	e.mu.RLock()
 	runners, ok := e.runners[symbol]
 	e.mu.RUnlock()
@@ -89,7 +88,7 @@ func (e *Executor) OnMarketData(symbol string, price float64) []*infra.Command {
 		return nil
 	}
 
-	var commands []*infra.Command
+	var commands []*model.Order
 
 	// 遍历所有关注该 Symbol 的策略
 	// 并发安全注意：如果 Runner 内部状态复杂，这里可能需要加锁或单独通过 channel 通信
@@ -122,3 +121,7 @@ func (e *Executor) GetSymbols() []string {
 	}
 	return symbols
 }
+
+
+
+

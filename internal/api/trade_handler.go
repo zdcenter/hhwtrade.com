@@ -8,7 +8,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"hhwtrade.com/internal/engine"
-	"hhwtrade.com/internal/infra"
 	"hhwtrade.com/internal/model"
 )
 
@@ -46,54 +45,30 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	microPart := now.Nanosecond() / 1000
 	orderRef := fmt.Sprintf("%06d%06d", timestampPart, microPart)
 
-	// 2. Send Command to CTP FIRST (minimize latency)
-	// Aligned with CThostFtdcInputOrderField
-	cmdPayload := map[string]interface{}{
-		"InstrumentID":        req.InstrumentID,
-		"OrderRef":            orderRef,
-		"Direction":           string(req.Direction),
-		"CombOffsetFlag":      string(req.Offset),
-		"CombHedgeFlag":       "1", // '1' is Speculation (投机)
-		"LimitPrice":          req.Price,
-		"VolumeTotalOriginal": req.Volume,
-		"OrderPriceType":      "2", // '2' is LimitPrice (限价)
-		"TimeCondition":       "3", // '3' is GFD (当日有效)
-		"VolumeCondition":     "1", // '1' is any volume (任意数量)
-		"ContingentCondition": "1", // '1' is immediately (立即触发)
-		"ForceCloseReason":    "0", // '0' is not force close (非强平)
+	// 2. Prepare Order Model
+	order := model.Order{
+		UserID:              req.UserID,
+		InstrumentID:        req.InstrumentID,
+		OrderRef:            orderRef,
+		Direction:           req.Direction,
+		CombOffsetFlag:      req.Offset,
+		LimitPrice:          req.Price,
+		VolumeTotalOriginal: req.Volume,
+		OrderStatus:         model.OrderStatusSent,
+		StrategyID:          req.StrategyID,
+		// ExchangeID, InvestorID will be filled/handled by CTP Client or defaults
 	}
 
-	tradeCmd := infra.Command{
-		Type:      "INSERT_ORDER",
-		Payload:   cmdPayload,
-		RequestID: orderRef,
-	}
-
-	if err := h.eng.SendCommand(context.Background(), tradeCmd); err != nil {
+	// 3. Send Command to CTP via Client
+	if err := h.eng.GetCtpClient().InsertOrder(context.Background(), &order); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to send order to gateway"})
 	}
 
-	// 3. Write to DB asynchronously (non-blocking)
-	// Even if DB write fails, CTP will send back RTN_ORDER which will create/update the record
+	// 4. Write to DB asynchronously (non-blocking)
 	go func() {
-		order := model.Order{
-			UserID:              req.UserID,
-			InstrumentID:        req.InstrumentID,
-			Direction:           req.Direction,
-			CombOffsetFlag:      req.Offset,
-			LimitPrice:          req.Price,
-			VolumeTotalOriginal: req.Volume,
-			OrderStatus:         model.OrderStatusSent,
-			OrderRef:            orderRef,
-			StrategyID:          req.StrategyID,
-		}
-
 		db := h.eng.GetPostgresClient().DB
 		if err := db.Create(&order).Error; err != nil {
-			// Log error but don't fail the request
-			// The order is already sent to CTP, RTN_ORDER will handle it
 			log.Printf("Warning: Failed to write order %s to DB: %v", orderRef, err)
-			// TODO: Write to failure queue for retry
 		}
 	}()
 
@@ -175,19 +150,7 @@ func (h *TradeHandler) CancelOrder(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Order already in terminal state"})
 	}
 
-	cmd := infra.Command{
-		Type: "CANCEL_ORDER",
-		Payload: map[string]interface{}{
-			"InstrumentID": order.InstrumentID,
-			"OrderRef":     order.OrderRef,
-			"FrontID":      order.FrontID,
-			"SessionID":    order.SessionID,
-			"ActionFlag":   "0", // '0' is Delete (撤单)
-		},
-		RequestID: "cancel-" + order.OrderRef,
-	}
-
-	if err := h.eng.SendCommand(context.Background(), cmd); err != nil {
+	if err := h.eng.GetCtpClient().CancelOrder(context.Background(), &order); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to send cancel command"})
 	}
 
