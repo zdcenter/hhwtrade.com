@@ -33,6 +33,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	// Initialize Subscription Handler
 	subHandler := NewSubscriptionHandler(eng)
 	strategyHandler := NewStrategyHandler(eng)
+	futureHandler := NewFutureHandler(eng)
 
 	// Initialize Casbin Enforcer
 	enforcer, err := auth.InitCasbin(eng.GetPostgresClient().DB)
@@ -64,12 +65,21 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	api.Put("/users/:userID/subscriptions/reorder", subHandler.ReorderSubscriptions)
 	api.Delete("/users/:userID/subscriptions/:symbol", subHandler.RemoveSubscription)
 
-	api.Get("/futures-contracts/search", subHandler.SearchInstruments)
-	api.Post("/futures-contracts/sync", subHandler.SyncInstruments)
+	// Future Routes
+	api.Get("/futures", futureHandler.GetFutures)
+	api.Get("/futures/search", futureHandler.SearchInstruments)
+	api.Post("/futures/sync", futureHandler.SyncInstruments)
+	api.Post("/futures/cleanup", futureHandler.CleanupExpired)
+	api.Get("/futures/:id", futureHandler.GetFuture)
+	api.Put("/futures/:id", futureHandler.UpdateFuture)
+	api.Delete("/futures/:id", futureHandler.DeleteFuture)
 
 	// Strategy Routes
 	api.Post("/strategies", strategyHandler.CreateStrategy)
 	api.Get("/users/:userID/strategies", strategyHandler.GetStrategies)
+	api.Get("/strategies/:id", strategyHandler.GetStrategy)
+	api.Put("/strategies/:id", strategyHandler.UpdateStrategy)
+	api.Delete("/strategies/:id", strategyHandler.DeleteStrategy)
 	api.Post("/strategies/:id/stop", strategyHandler.StopStrategy)
 	api.Post("/strategies/:id/start", strategyHandler.StartStrategy)
 

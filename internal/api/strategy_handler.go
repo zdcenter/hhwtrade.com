@@ -90,4 +90,74 @@ func (h *StrategyHandler) StartStrategy(c *fiber.Ctx) error {
 	// TODO: Notify Engine to load this strategy into memory immediately
 
 	return c.SendStatus(fiber.StatusOK)
-}	
+}
+
+// GetStrategy returns a single strategy by its ID.
+// GET /api/strategies/:id
+func (h *StrategyHandler) GetStrategy(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var strategy model.Strategy
+	db := h.eng.GetPostgresClient().DB
+
+	if err := db.Where("id = ?", id).First(&strategy).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"Error": "Strategy not found"})
+	}
+
+	return c.JSON(strategy)
+}
+
+// UpdateStrategy updates a strategy's configuration or other properties.
+// PUT /api/strategies/:id
+func (h *StrategyHandler) UpdateStrategy(c *fiber.Ctx) error {
+	id := c.Params("id")
+	db := h.eng.GetPostgresClient().DB
+
+	var strategy model.Strategy
+	if err := db.Where("id = ?", id).First(&strategy).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"Error": "Strategy not found"})
+	}
+
+	var req struct {
+		Config       json.RawMessage    `json:"Config"`
+		InstrumentID string             `json:"InstrumentID"`
+		Type         model.StrategyType `json:"Type"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
+	}
+
+	updates := map[string]interface{}{}
+	if req.Config != nil {
+		updates["Config"] = req.Config
+	}
+	if req.InstrumentID != "" {
+		updates["InstrumentID"] = req.InstrumentID
+	}
+	if req.Type != "" {
+		updates["Type"] = req.Type
+	}
+
+	if err := db.Model(&strategy).Updates(updates).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"Error": "Update failed"})
+	}
+
+	// TODO: Notify Engine to reload this strategy if it is running
+
+	return c.JSON(strategy)
+}
+
+// DeleteStrategy removes a strategy from the DB.
+// DELETE /api/strategies/:id
+func (h *StrategyHandler) DeleteStrategy(c *fiber.Ctx) error {
+	id := c.Params("id")
+	db := h.eng.GetPostgresClient().DB
+
+	if err := db.Where("id = ?", id).Delete(&model.Strategy{}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"Error": "Delete failed"})
+	}
+
+	// TODO: Notify Engine to stop and unload this strategy
+
+	return c.JSON(fiber.Map{"Status": true})
+}

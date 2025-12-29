@@ -200,7 +200,8 @@ func (e *Engine) handleTradeResponse(jsonStr string) {
 				OffsetFlag:   string(order.CombOffsetFlag),
 				Price:        price,
 				Volume:       int(tradeVol),
-				TradeTime:    time.Now().Format("15:04:05"), 
+				TradeTime:    time.Now().Format("15:04:05"),
+				StrategyID:   order.StrategyID,
 			})
 
 			// 2. Partial Fill Logic

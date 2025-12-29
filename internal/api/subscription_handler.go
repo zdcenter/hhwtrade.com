@@ -128,40 +128,7 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 }
 
 
-// SearchInstruments searches for instruments by symbol, product ID, or name.
-// GET /api/instruments?query=rb
-func (h *SubscriptionHandler) SearchInstruments(c *fiber.Ctx) error {
-	query := c.Query("q")
-	if query == "" {
-		return c.JSON([]model.Future{})
-	}
 
-	var instruments []model.Future
-	db := h.eng.GetPostgresClient().DB
-
-	// Priority Search:
-	// 1. Prefix match on Symbol (e.g. rb%)
-	// 2. Exact match on ProductID (e.g. rb)
-	// 3. Fuzzy match on Name
-	searchTerm := query + "%"
-	if err := db.Model(&model.Future{}).Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
-		Order("instrument_id ASC").
-		Limit(50).
-		Find(&instruments).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to search instruments"})
-	}
-
-	return c.JSON(instruments)
-}
-
-// SyncInstruments triggers the background process to fetch and save all instruments from CTP.
-// POST /api/instruments/sync
-func (h *SubscriptionHandler) SyncInstruments(c *fiber.Ctx) error {
-	if err := h.eng.SyncInstruments(); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger instrument sync"})
-	}
-	return c.JSON(fiber.Map{"Message": "Instrument synchronization triggered"})
-}
 
 
 func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {

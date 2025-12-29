@@ -95,6 +95,7 @@ type Trade struct {
 	TradeDate    string  `json:"TradeDate"`
 	TradeTime    string  `json:"TradeTime"`
 	TradingDay   string  `json:"TradingDay"`
+	StrategyID   *uint   `gorm:"index" json:"StrategyID,omitempty"`
 }
 
 type OrderLog struct {
