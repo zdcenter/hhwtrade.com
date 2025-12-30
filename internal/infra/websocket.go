@@ -3,230 +3,245 @@ package infra
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gofiber/contrib/websocket"
 )
 
-// WsManager manages WebSocket connections and subscriptions.
-type WsManager struct {
-	// Active clients
-	// map[连接对象的内存地址]存在
-	// {
-	//     0xc0000a0100: true,  // -> 这是一个来自张三的 WebSocket 连接对象
-	//     0xc0000a0280: true,  // -> 这是一个来自李四的 WebSocket 连接对象
-	//     0xc0000a0400: true,  // -> 这是一个来自王五的 WebSocket 连接对象
-	// }
-	clients map[*websocket.Conn]bool
+// WsClient 封装单个 WebSocket 连接
+// 负责维护该连接的写队列，确保线程安全
+type WsClient struct {
+	// 底层连接
+	conn *websocket.Conn
 
-	// map[主题]map[连接对象的内存地址]存在
-	// {
-	// 	// 品种 "rb2601" (螺纹钢): 张三和李四都订阅了
-	// 	"rb2601": {
-	// 		0xc0000a0100: true, // -> 张三
-	// 		0xc0000a0280: true, // -> 李四
-	// 	},
-	// 	// 品种 "BTC-USDT" (比特币): 只有王五订阅了
-	// 	"BTC-USDT": {
-	// 		0xc0000a0400: true, // -> 王五
-	// 	},
-	// 	// 品种 "AAPL" (苹果): 张三也订阅了这个
-	// 	"AAPL": {
-	// 		0xc0000a0100: true, // -> 张三 (一个人可以订阅多个)
-	// 	}
-	// }
-	subscriptions map[string]map[*websocket.Conn]bool
-
-	// Mutex to protect maps
-	mu sync.RWMutex
-
-	// Channels for actions
-	Register    chan UserConnection
-	Unregister  chan UserConnection
-	Subscribe   chan Subscription
-	Unsubscribe chan Subscription
-
-	// User connection mapping: UserID -> Set of Connections
-	userConns map[string]map[*websocket.Conn]bool
-
-	// sendChannels stores a buffered channel for each client.
-	// This helps avoid blocking the main engine loop if one client is slow.
-	sendChannels map[*websocket.Conn]chan interface{}
+	// 写消息的缓冲通道
+	// 避免直接在业务逻辑中调用 WriteJSON 导致阻塞
+	sendCh chan interface{}
 }
 
-type UserConnection struct {
-	UserID string
-	Conn   *websocket.Conn
-}
-
-type Subscription struct {
-	Conn   *websocket.Conn
-	Symbol string
-}
-
-var GlobalWsManager = &WsManager{
-	clients:       make(map[*websocket.Conn]bool),
-	userConns:     make(map[string]map[*websocket.Conn]bool),
-	subscriptions: make(map[string]map[*websocket.Conn]bool),
-	sendChannels:  make(map[*websocket.Conn]chan interface{}),
-	Register:      make(chan UserConnection),
-	Unregister:    make(chan UserConnection),
-	Subscribe:     make(chan Subscription),
-	Unsubscribe:   make(chan Subscription),
-}
-
-// SubscribeUser manually triggers subscription for a specific user ID.
-// This is used by the HTTP API side.
-func (manager *WsManager) SubscribeUser(userID, symbol string) {
-	manager.mu.RLock()
-	conns, ok := manager.userConns[userID]
-	manager.mu.RUnlock()
-
-	if ok {
-		for conn := range conns {
-			manager.Subscribe <- Subscription{Conn: conn, Symbol: symbol}
-		}
+// NewWsClient 创建新的客户端实例并启动写循环
+func NewWsClient(conn *websocket.Conn) *WsClient {
+	c := &WsClient{
+		conn:   conn,
+		sendCh: make(chan interface{}, 256), // 256 是缓冲区大小，防止消息积压
 	}
+	go c.writeLoop()
+	return c
 }
 
-// UnsubscribeUser manually triggers unsubscription for a specific user ID.
-func (manager *WsManager) UnsubscribeUser(userID, symbol string) {
-	manager.mu.RLock()
-	conns, ok := manager.userConns[userID]
-	manager.mu.RUnlock()
+// writeLoop 是一个常驻协程，专门处理发往该客户端的消息
+// 这样可以确保同一个 Conn 的 Write 操作是串行的
+func (c *WsClient) writeLoop() {
+	defer func() {
+		c.conn.Close()
+	}()
 
-	if ok {
-		for conn := range conns {
-			manager.Unsubscribe <- Subscription{Conn: conn, Symbol: symbol}
-		}
-	}
-}
-
-func (manager *WsManager) Start() {
-	log.Println("Starting WebSocket Manager...")
 	for {
 		select {
-		case req := <-manager.Register:
-			manager.mu.Lock()
-			manager.clients[req.Conn] = true
+		case msg, ok := <-c.sendCh:
+			if !ok {
+				// 通道被关闭，说明连接已断开
+				return
+			}
+			// 设置写超时，防止网络卡死
+			c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := c.conn.WriteJSON(msg); err != nil {
+				log.Printf("WS Error: %v", err)
+				return // 发生错误，退出循环，触发 Close
+			}
+		}
+	}
+}
 
-			// Create a buffered channel for this connection
-			sendCh := make(chan interface{}, 256)
-			manager.sendChannels[req.Conn] = sendCh
+// Send 发送消息给客户端（非阻塞，除非缓冲已满）
+func (c *WsClient) Send(msg interface{}) {
+	select {
+	case c.sendCh <- msg:
+	default:
+		// 缓冲区已满，直接丢弃或记录日志
+		// 对于实时行情，丢弃旧数据通常比阻塞好
+		log.Println("WS Warning: Client buffer full, dropping message")
+	}
+}
 
-			// Start a dedicated writer goroutine for this connection
-			go func(conn *websocket.Conn, ch chan interface{}) {
-				for msg := range ch {
-					if err := conn.WriteJSON(msg); err != nil {
-						// On error, let the connection close and unregister handle it
-						log.Printf("WS WriteLoop error: %v", err)
-						conn.Close()
-						return
-					}
-				}
-			}(req.Conn, sendCh)
+// Close 关闭客户端连接
+func (c *WsClient) Close() {
+	close(c.sendCh)
+}
 
-			// Track user connection
+// -------------------------------------------------------------
+
+// WsManager 管理所有的 WebSocket 客户端连接和订阅关系
+// 采用 Hub 模式：所有的注册、注销、广播都由 Manager 统一调度
+type WsManager struct {
+	// 所有活跃的客户端集合
+	// map[*WsClient]bool
+	clients map[*WsClient]bool
+
+	// 订阅表: Symbol -> 客户端集合
+	// map[string]map[*WsClient]bool
+	subscriptions map[string]map[*WsClient]bool
+
+	// 用户映射: UserID -> 客户端集合 (一个用户可能开多个网页)
+	// map[string]map[*WsClient]bool
+	userConns map[string]map[*WsClient]bool
+
+	// 互斥锁，保护上述 map 的并发读写
+	mu sync.RWMutex
+
+	// 注册通道
+	Register chan *RegisterReq
+	// 注销通道
+	Unregister chan *WsClient
+}
+
+// RegisterReq 注册请求结构体
+type RegisterReq struct {
+	Client *WsClient
+	UserID string // 可选，用于私有推送
+}
+
+// NewWsManager 创建管理器
+func NewWsManager() *WsManager {
+	return &WsManager{
+		clients:       make(map[*WsClient]bool),
+		subscriptions: make(map[string]map[*WsClient]bool),
+		userConns:     make(map[string]map[*WsClient]bool),
+		Register:      make(chan *RegisterReq),
+		Unregister:    make(chan *WsClient),
+	}
+}
+
+// Start 启动管理器的事件循环
+func (m *WsManager) Start() {
+	log.Println("WebSocket Manager Started (Refactored)")
+	for {
+		select {
+		case req := <-m.Register:
+			m.mu.Lock()
+			m.clients[req.Client] = true
 			if req.UserID != "" {
-				if manager.userConns[req.UserID] == nil {
-					manager.userConns[req.UserID] = make(map[*websocket.Conn]bool)
+				if m.userConns[req.UserID] == nil {
+					m.userConns[req.UserID] = make(map[*WsClient]bool)
 				}
-				manager.userConns[req.UserID][req.Conn] = true
+				m.userConns[req.UserID][req.Client] = true
 			}
+			m.mu.Unlock()
+			log.Printf("WS: New client registered (User: %s)", req.UserID)
 
-			manager.mu.Unlock()
-			log.Printf("New WebSocket client connected: %s", req.UserID)
+		case client := <-m.Unregister:
+			m.mu.Lock()
+			if _, ok := m.clients[client]; ok {
+				delete(m.clients, client)
+				client.Close()
 
-		case req := <-manager.Unregister:
-			manager.mu.Lock()
-			if _, ok := manager.clients[req.Conn]; ok {
-				delete(manager.clients, req.Conn)
-
-				// Cleanup send channel
-				if ch, exists := manager.sendChannels[req.Conn]; exists {
-					close(ch)
-					delete(manager.sendChannels, req.Conn)
-				}
-
-				// Remove from user mapping
-				if req.UserID != "" && manager.userConns[req.UserID] != nil {
-					delete(manager.userConns[req.UserID], req.Conn)
-					if len(manager.userConns[req.UserID]) == 0 {
-						delete(manager.userConns, req.UserID)
+				// 清理用户映射
+				for userID, conns := range m.userConns {
+					delete(conns, client)
+					if len(conns) == 0 {
+						delete(m.userConns, userID)
 					}
 				}
 
-				// Remove from all subscriptions
-				for topic, clients := range manager.subscriptions {
-					delete(clients, req.Conn)
-					if len(clients) == 0 {
-						delete(manager.subscriptions, topic)
+				// 清理订阅
+				for symbol, subscribers := range m.subscriptions {
+					delete(subscribers, client)
+					if len(subscribers) == 0 {
+						delete(m.subscriptions, symbol)
 					}
 				}
 			}
-			manager.mu.Unlock()
-			log.Println("WebSocket client disconnected")
-
-		case sub := <-manager.Subscribe:
-			manager.mu.Lock()
-			if manager.subscriptions[sub.Symbol] == nil {
-				manager.subscriptions[sub.Symbol] = make(map[*websocket.Conn]bool)
-			}
-			manager.subscriptions[sub.Symbol][sub.Conn] = true
-			manager.mu.Unlock()
-			log.Printf("Client subscribed to %s", sub.Symbol)
-
-		case sub := <-manager.Unsubscribe:
-			manager.mu.Lock()
-			if clients, ok := manager.subscriptions[sub.Symbol]; ok {
-				delete(clients, sub.Conn)
-				if len(clients) == 0 {
-					delete(manager.subscriptions, sub.Symbol)
-				}
-			}
-			manager.mu.Unlock()
-			log.Printf("Client unsubscribed from %s", sub.Symbol)
+			m.mu.Unlock()
+			log.Println("WS: Client unregistered")
 		}
 	}
 }
 
-// Broadcast sends the market message to all subscribers.
-func (manager *WsManager) Broadcast(msg MarketMessage) {
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
+// Subscribe 客户端订阅某个 Topic
+func (m *WsManager) Subscribe(client *WsClient, symbol string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	subscribers, ok := manager.subscriptions[msg.Symbol]
-	if ok {
-		// Defensive check: don't broadcast empty payloads which break JSON marshaling
-		if len(msg.Payload) == 0 {
-			return
-		}
-		for conn := range subscribers {
-			if ch, exists := manager.sendChannels[conn]; exists {
-				select {
-				case ch <- msg.Payload: // 只推送原始 Payload (json.RawMessage)
-				default:
-					// Buffer full: drop message for this specific slow client
-				}
-			}
+	if m.subscriptions[symbol] == nil {
+		m.subscriptions[symbol] = make(map[*WsClient]bool)
+	}
+	m.subscriptions[symbol][client] = true
+}
+
+// Unsubscribe 客户端取消订阅
+func (m *WsManager) Unsubscribe(client *WsClient, symbol string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if clients, ok := m.subscriptions[symbol]; ok {
+		delete(clients, client)
+		if len(clients) == 0 {
+			delete(m.subscriptions, symbol)
 		}
 	}
 }
 
-// PushToUser sends a message to all active connections of a specific user.
-func (manager *WsManager) PushToUser(userID string, msg interface{}) {
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
+// Broadcast 广播行情数据给所有订阅者
+func (m *WsManager) Broadcast(msg MarketMessage) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	conns, ok := manager.userConns[userID]
-	if ok {
-		for conn := range conns {
-			if ch, exists := manager.sendChannels[conn]; exists {
-				select {
-				case ch <- msg:
-				default:
-					// Skip if buffer is full
-				}
-			}
+	subscribers, ok := m.subscriptions[msg.Symbol]
+	if !ok {
+		return
+	}
+
+	for client := range subscribers {
+		client.Send(msg.Payload)
+	}
+}
+
+// PushToUser 推送私有消息给特定用户
+func (m *WsManager) PushToUser(userID string, msg interface{}) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	clients, ok := m.userConns[userID]
+	if !ok {
+		return
+	}
+
+	for client := range clients {
+		client.Send(msg)
+	}
+}
+
+// SubscribeUser 为指定用户的当前所有活跃连接订阅 Symbol
+func (m *WsManager) SubscribeUser(userID, symbol string) {
+	// 1. 获取用户当前所有的连接 (RLock)
+	m.mu.RLock()
+	var targetClients []*WsClient
+	if clients, ok := m.userConns[userID]; ok {
+		for client := range clients {
+			targetClients = append(targetClients, client)
 		}
+	}
+	m.mu.RUnlock()
+
+	// 2. 逐个订阅 (Lock)
+	// 必须分开操作，避免死锁 (Subscribe 内部会加 Lock)
+	for _, client := range targetClients {
+		m.Subscribe(client, symbol)
+	}
+}
+
+// UnsubscribeUser 为指定用户取消订阅 Symbol
+func (m *WsManager) UnsubscribeUser(userID, symbol string) {
+	m.mu.RLock()
+	var targetClients []*WsClient
+	if clients, ok := m.userConns[userID]; ok {
+		for client := range clients {
+			targetClients = append(targetClients, client)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, client := range targetClients {
+		m.Unsubscribe(client, symbol)
 	}
 }

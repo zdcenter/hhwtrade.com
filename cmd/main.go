@@ -11,10 +11,10 @@ import (
 )
 
 func main() {
-	// 1. Load Configuration
+	// 1. 加载配置
 	cfg := config.LoadConfig()
 
-	// 2. Initialize Infrastructure
+	// 2. 初始化基础设施
 	// Postgres
 	pg, err := infra.NewPostgresClient(cfg.Database)
 	if err != nil {
@@ -27,18 +27,20 @@ func main() {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 
-	// 3. Initialize Engine
-	// We use the global WsManager for now as it's initialized in infra package
-	eng := engine.NewEngine(cfg, pg, rdb, infra.GlobalWsManager)
+	// 3. 初始化 WebSocket 管理器
+	wsHub := infra.NewWsManager()
 
-	// Start Engine (starts background processes like WebSocket Hub and Redis Subscriber)
+	// 4. 初始化引擎
+	eng := engine.NewEngine(cfg, pg, rdb, wsHub)
+
+	// 启动引擎（启动后台进程，如 WebSocket Hub 和 Redis 订阅器）
 	ctx := context.Background()
 	eng.Start(ctx)
 
-	// 4. Setup Fiber Server
+	// 5. 设置 Fiber 服务器
 	app := api.NewServer(cfg, eng)
 
-	// 5. Start Server
+	// 6. 启动服务器
 	log.Printf("Server starting on port %s", cfg.Server.Port)
 	if err := app.Listen(cfg.Server.Port); err != nil {
 		log.Fatalf("Server failed to start: %v", err)

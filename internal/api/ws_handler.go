@@ -35,25 +35,31 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 		userID := c.Query("userID")
 		log.Println("New WS connection, userID:", userID)
 
+		// 1. Create Client Wrapper
+		client := infra.NewWsClient(c)
+
+		// 2. Register
+		wsManager.Register <- &infra.RegisterReq{
+			Client: client,
+			UserID: userID,
+		}
+
 		// Track which symbols this connection has subscribed to for cleanup
 		localSubs := make(map[string]bool)
 
-		// 1. Register new connection with UserID
-		wsManager.Register <- infra.UserConnection{Conn: c, UserID: userID}
-
-		// 2. Cleanup on exit
+		// 3. Cleanup on exit
 		defer func() {
-			wsManager.Unregister <- infra.UserConnection{Conn: c, UserID: userID}
+			wsManager.Unregister <- client
 			// Engine cleanup: Unsubscribe from all symbols this connection was watching
 			for instrumentID := range localSubs {
 				if err := eng.UnsubscribeSymbol(instrumentID); err != nil {
 					log.Printf("WS Cleanup: Failed to unsubscribe %s: %v", instrumentID, err)
 				}
 			}
-			c.Close()
+			// Client Close is handled by Unregister -> client.Close()
 		}()
 
-		// 3. Auto-subscribe stored symbols (Restore session)
+		// 4. Auto-subscribe stored symbols (Restore session)
 		if userID != "" {
 			go func() {
 				var subs []model.Subscription
@@ -61,7 +67,8 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 				if err := db.Where("user_id = ?", userID).Find(&subs).Error; err == nil {
 					for _, sub := range subs {
 						log.Printf("Auto-subscribing %s to %s", userID, sub.InstrumentID)
-						wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: sub.InstrumentID}
+						wsManager.Subscribe(client, sub.InstrumentID)
+						
 						// Mark for local tracking and trigger Engine subscription
 						localSubs[sub.InstrumentID] = true
 						if err := eng.SubscribeSymbol(sub.InstrumentID); err != nil {
@@ -74,7 +81,7 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 			}()
 		}
 
-		// 4. Read Loop
+		// 5. Read Loop
 		var (
 			msg WsRequest
 			err error
@@ -92,7 +99,8 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 			switch msg.Action {
 			case "subscribe":
 				// Handle logical subscription
-				wsManager.Subscribe <- infra.Subscription{Conn: c, Symbol: msg.InstrumentID}
+				wsManager.Subscribe(client, msg.InstrumentID)
+				
 				// Track locally and trigger engine
 				if !localSubs[msg.InstrumentID] {
 					localSubs[msg.InstrumentID] = true
@@ -103,7 +111,8 @@ func InitWebsocket(app *fiber.App, eng *engine.Engine) {
 
 			case "unsubscribe":
 				// Handle logical unsubscription
-				wsManager.Unsubscribe <- infra.Subscription{Conn: c, Symbol: msg.InstrumentID}
+				wsManager.Unsubscribe(client, msg.InstrumentID)
+				
 				// Remove from local tracking and trigger engine
 				if localSubs[msg.InstrumentID] {
 					delete(localSubs, msg.InstrumentID)

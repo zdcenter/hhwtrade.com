@@ -20,19 +20,19 @@ func NewFutureHandler(eng *engine.Engine) *FutureHandler {
 // GetFutures returns a paginated list of available future contracts.
 // GET /api/futures
 func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
-	page, _ := strconv.Atoi(c.Query("Page", "1"))
-	limit, _ := strconv.Atoi(c.Query("Limit", "50"))
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize", "50"))
 	instrumentID := c.Query("InstrumentID")
 	exchangeID := c.Query("ExchangeID")
 
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 500 {
-		limit = 50
+	if pageSize < 1 || pageSize > 500 {
+		pageSize = 50
 	}
 
-	offset := (page - 1) * limit
+	offset := (page - 1) * pageSize
 
 	var instruments []model.Future
 	var total int64
@@ -51,21 +51,11 @@ func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"Error": "Database error"})
 	}
 
-	if err := query.Order("instrument_id ASC").Limit(limit).Offset(offset).Find(&instruments).Error; err != nil {
+	if err := query.Order("instrument_id ASC").Limit(pageSize).Offset(offset).Find(&instruments).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"Error": "Database error"})
 	}
 
-	return c.JSON(fiber.Map{
-		"Status": true,
-		"Data": fiber.Map{
-			"Items": instruments,
-			"Pagination": fiber.Map{
-				"Total":       total,
-				"Limit":       limit,
-				"CurrentPage": page,
-			},
-		},
-	})
+	return SendPaginatedResponse(c, instruments, page, pageSize, total)
 }
 
 // GetFuture returns a single instrument by its ID.

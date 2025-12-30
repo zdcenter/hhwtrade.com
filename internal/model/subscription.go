@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// Subscription stores the user's favorite symbols.
+// Subscription 存储用户收藏的合约
 type Subscription struct {
 	ID           uint      `gorm:"primaryKey" json:"ID"`
 	UserID       string    `gorm:"index;uniqueIndex:idx_user_inst" json:"UserID"`
@@ -13,4 +13,3 @@ type Subscription struct {
 	Sorter       int       `json:"Sorter"`
 	CreatedAt    time.Time `json:"CreatedAt"`
 }
-

@@ -19,11 +19,11 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	DBName   string
+	Host        string
+	Port        int
+	User        string
+	Password    string
+	DBName      string
 	SSLMode     string
 	TimeZone    string
 	TablePrefix string `mapstructure:"table_prefix"`
@@ -38,8 +38,8 @@ type RedisConfig struct {
 func LoadConfig() *Config {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")        // Look for config in current directory
-	viper.AddConfigPath("./config") // Look for config in config directory
+	viper.AddConfigPath(".")        // 在当前目录中查找配置
+	viper.AddConfigPath("./config") // 在 config 目录中查找配置
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()

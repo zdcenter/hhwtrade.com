@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strconv"	
 
 	"github.com/gofiber/fiber/v2"
 	"hhwtrade.com/internal/engine"
@@ -52,14 +53,32 @@ func (h *StrategyHandler) CreateStrategy(c *fiber.Ctx) error {
 // GET /api/users/:userID/strategies
 func (h *StrategyHandler) GetStrategies(c *fiber.Ctx) error {
 	userID := c.Params("userID")
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize", "20"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
 	var strategies []model.Strategy
+	var total int64
 
 	db := h.eng.GetPostgresClient().DB
-	if err := db.Where("user_id = ?", userID).Find(&strategies).Error; err != nil {
+	query := db.Model(&model.Strategy{}).Where("user_id = ?", userID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to count strategies"})
+	}
+
+	if err := query.Order("id DESC").Limit(pageSize).Offset(offset).Find(&strategies).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch strategies"})
 	}
 
-	return c.JSON(strategies)
+	return SendPaginatedResponse(c, strategies, page, pageSize, total)
 }
 
 // StopStrategy stops a running strategy.

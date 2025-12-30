@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -99,18 +100,33 @@ func (h *TradeHandler) GetPositions(c *fiber.Ctx) error {
 // GET /api/users/:userID/orders
 func (h *TradeHandler) GetOrders(c *fiber.Ctx) error {
 	userID := c.Params("userID")
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize", "50"))
 
-	// Pagination params could be added here
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
+	offset := (page - 1) * pageSize
 
 	var orders []model.Order
+	var total int64
+
 	db := h.eng.GetPostgresClient().DB
+	query := db.Model(&model.Order{}).Where("user_id = ?", userID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to count orders"})
+	}
 
 	// Order by time desc
-	if err := db.Where("user_id = ?", userID).Order("created_at desc").Limit(50).Find(&orders).Error; err != nil {
+	if err := query.Order("created_at desc").Limit(pageSize).Offset(offset).Find(&orders).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch orders"})
 	}
 
-	return c.JSON(orders)
+	return SendPaginatedResponse(c, orders, page, pageSize, total)
 }
 
 // SyncPositions triggers a position query to CTP Core.

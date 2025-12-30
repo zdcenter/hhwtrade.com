@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// StrategyType defines the supported strategy types.
+// StrategyType 定义支持的策略类型
 type StrategyType string
 
 const (
@@ -13,7 +13,7 @@ const (
 	StrategyTypeGridTrading    StrategyType = "grid_trading"
 )
 
-// StrategyStatus defines the lifecycle status of a strategy.
+// StrategyStatus 定义策略的生命周期状态
 type StrategyStatus string
 
 const (
@@ -23,19 +23,19 @@ const (
 	StrategyStatusError     StrategyStatus = "error"
 )
 
-// Strategy represents a user's running strategy instance.
+// Strategy 表示用户正在运行的策略实例
 type Strategy struct {
-	ID        uint           `gorm:"primaryKey" json:"ID"`
-	UserID    string         `gorm:"index" json:"UserID"`
-	Type      StrategyType   `json:"Type"`
-	InstrumentID string      `gorm:"index" json:"InstrumentID"`
-	Status    StrategyStatus `json:"Status"`
-	Config    json.RawMessage `gorm:"type:jsonb" json:"Config"`
-	CreatedAt time.Time      `json:"CreatedAt"`
-	UpdatedAt time.Time      `json:"UpdatedAt"`
+	ID           uint            `gorm:"primaryKey" json:"ID"`
+	UserID       string          `gorm:"index" json:"UserID"`
+	Type         StrategyType    `json:"Type"`
+	InstrumentID string          `gorm:"index" json:"InstrumentID"`
+	Status       StrategyStatus  `json:"Status"`
+	Config       json.RawMessage `gorm:"type:jsonb" json:"Config"`
+	CreatedAt    time.Time       `json:"CreatedAt"`
+	UpdatedAt    time.Time       `json:"UpdatedAt"`
 }
 
-// ConditionOrderConfig defines the configuration structure for a basic condition order strategy.
+// ConditionOrderConfig 定义基本条件单策略的配置结构
 type ConditionOrderConfig struct {
 	TriggerPrice float64 `json:"TriggerPrice"`
 	Operator     string  `json:"Operator"`

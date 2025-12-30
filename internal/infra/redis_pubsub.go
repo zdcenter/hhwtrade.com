@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/redis/go-redis/v9"
+	"hhwtrade.com/internal/ctp"
 )
 
 // MarketMessage is used for internal routing between Redis and WebSocket/Engine.
@@ -21,7 +22,7 @@ var MarketDataChan = make(chan MarketMessage, 10000)
 // StartMarketDataSubscriber starts a goroutine to subscribe to market data.
 func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 	// Subscribe to all channels matching pattern
-	pattern := PubCtpMarketDataPrefix + "*"
+	pattern := ctp.PubCtpMarketDataPrefix + "*"
 	pubsub := rdb.PSubscribe(ctx, pattern)
 
 	// Wait for confirmation that subscription is created
@@ -50,7 +51,7 @@ func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 			}
 
 			// Strip prefix to get the actual symbol
-			symbol := strings.TrimPrefix(msg.Channel, PubCtpMarketDataPrefix)
+			symbol := strings.TrimPrefix(msg.Channel, ctp.PubCtpMarketDataPrefix)
 
 			// Forward payload to internal channel non-blocking
 			message := MarketMessage{
@@ -70,7 +71,7 @@ func StartMarketDataSubscriber(rdb *redis.Client, ctx context.Context) {
 
 // StartQueryReplySubscriber starts a goroutine to listen for query responses from CTP.
 func StartQueryReplySubscriber(rdb *redis.Client, ctx context.Context) {
-	pubsub := rdb.Subscribe(ctx, PubCtpQueryReplyChan)
+	pubsub := rdb.Subscribe(ctx, ctp.PubCtpQueryReplyChan)
 
 	ch := pubsub.Channel()
 

@@ -51,12 +51,7 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch subscriptions"})
 	}
 
-	return c.JSON(fiber.Map{
-		"Total":    total,
-		"Page":     page,
-		"PageSize": pageSize,
-		"Data":     subs,
-	})
+	return SendPaginatedResponse(c, subs, page, pageSize, total)
 }
 
 // AddSubscription adds an instrument_id to the user's subscription list.
