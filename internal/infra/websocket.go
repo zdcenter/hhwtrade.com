@@ -245,3 +245,10 @@ func (m *WsManager) UnsubscribeUser(userID, symbol string) {
 		m.Unsubscribe(client, symbol)
 	}
 }
+
+// BroadcastMarketData 广播行情数据 (实现 domain.Notifier 接口)
+func (m *WsManager) BroadcastMarketData(data interface{}) {
+	if msg, ok := data.(MarketMessage); ok {
+		m.Broadcast(msg)
+	}
+}

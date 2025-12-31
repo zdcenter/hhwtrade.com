@@ -5,10 +5,10 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"hhwtrade.com/internal/config"
-	"hhwtrade.com/internal/engine"
 )
 
-func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
+// NewServer 创建 Fiber 服务器
+func NewServer(cfg *config.Config) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: cfg.Server.AppName,
 	})
@@ -16,9 +16,11 @@ func NewServer(cfg *config.Config, eng *engine.Engine) *fiber.App {
 	app.Use(logger.New())
 	app.Use(cors.New())
 
-	// 初始化并注册路由
-	router := NewRouter(app, cfg, eng)
-	router.RegisterRoutes()
-
 	return app
+}
+
+// SetupRoutes 配置路由 (在所有依赖准备好之后调用)
+func SetupRoutes(app *fiber.App, deps RouterDeps) {
+	router := NewRouter(deps)
+	router.RegisterRoutes()
 }

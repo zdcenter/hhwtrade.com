@@ -5,19 +5,26 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"hhwtrade.com/internal/engine"
+	"gorm.io/gorm"
+	"hhwtrade.com/internal/domain"
 	"hhwtrade.com/internal/model"
 )
 
+// FutureHandler 处理期货合约相关的 HTTP 请求
 type FutureHandler struct {
-	eng *engine.Engine
+	db        *gorm.DB
+	marketSvc domain.MarketService
 }
 
-func NewFutureHandler(eng *engine.Engine) *FutureHandler {
-	return &FutureHandler{eng: eng}
+// NewFutureHandler 创建期货合约处理器
+func NewFutureHandler(db *gorm.DB, marketSvc domain.MarketService) *FutureHandler {
+	return &FutureHandler{
+		db:        db,
+		marketSvc: marketSvc,
+	}
 }
 
-// GetFutures returns a paginated list of available future contracts.
+// GetFutures 获取期货合约列表
 // GET /api/futures
 func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -37,8 +44,7 @@ func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 	var instruments []model.Future
 	var total int64
 
-	db := h.eng.GetPostgresClient().DB
-	query := db.Model(&model.Future{})
+	query := h.db.Model(&model.Future{})
 
 	if instrumentID != "" {
 		query = query.Where("instrument_id ILIKE ?", instrumentID+"%")
@@ -58,28 +64,26 @@ func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 	return SendPaginatedResponse(c, instruments, page, pageSize, total)
 }
 
-// GetFuture returns a single instrument by its ID.
+// GetFuture 获取单个合约
 // GET /api/futures/:id
 func (h *FutureHandler) GetFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var instrument model.Future
-	db := h.eng.GetPostgresClient().DB
 
-	if err := db.Where("instrument_id = ?", id).First(&instrument).Error; err != nil {
+	if err := h.db.Where("instrument_id = ?", id).First(&instrument).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"Error": "Instrument not found"})
 	}
 
 	return c.JSON(fiber.Map{"Status": true, "Data": instrument})
 }
 
-// UpdateFuture updates an instrument's properties (like IsActive).
+// UpdateFuture 更新合约
 // PUT /api/futures/:id
 func (h *FutureHandler) UpdateFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
-	db := h.eng.GetPostgresClient().DB
 
 	var instrument model.Future
-	if err := db.Where("instrument_id = ?", id).First(&instrument).Error; err != nil {
+	if err := h.db.Where("instrument_id = ?", id).First(&instrument).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"Error": "Instrument not found"})
 	}
 
@@ -87,27 +91,26 @@ func (h *FutureHandler) UpdateFuture(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"Error": "Invalid body"})
 	}
 
-	if err := db.Save(&instrument).Error; err != nil {
+	if err := h.db.Save(&instrument).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"Error": "Update failed"})
 	}
 
 	return c.JSON(fiber.Map{"Status": true, "Data": instrument})
 }
 
-// DeleteFuture removes an instrument from the DB.
+// DeleteFuture 删除合约
 // DELETE /api/futures/:id
 func (h *FutureHandler) DeleteFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
-	db := h.eng.GetPostgresClient().DB
 
-	if err := db.Where("instrument_id = ?", id).Delete(&model.Future{}).Error; err != nil {
+	if err := h.db.Where("instrument_id = ?", id).Delete(&model.Future{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"Error": "Delete failed"})
 	}
 
 	return c.JSON(fiber.Map{"Status": true})
 }
 
-// SearchInstruments searches for instruments by symbol, product ID, or name.
+// SearchInstruments 搜索合约
 // GET /api/futures/search?q=rb
 func (h *FutureHandler) SearchInstruments(c *fiber.Ctx) error {
 	query := c.Query("q")
@@ -116,10 +119,10 @@ func (h *FutureHandler) SearchInstruments(c *fiber.Ctx) error {
 	}
 
 	var instruments []model.Future
-	db := h.eng.GetPostgresClient().DB
-
 	searchTerm := query + "%"
-	if err := db.Model(&model.Future{}).Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
+
+	if err := h.db.Model(&model.Future{}).
+		Where("instrument_id ILIKE ? OR product_id ILIKE ? OR instrument_name ILIKE ?", searchTerm, query, "%"+query+"%").
 		Order("instrument_id ASC").
 		Limit(50).
 		Find(&instruments).Error; err != nil {
@@ -129,28 +132,27 @@ func (h *FutureHandler) SearchInstruments(c *fiber.Ctx) error {
 	return c.JSON(instruments)
 }
 
-// SyncInstruments triggers the background process to fetch and save all instruments from CTP.
+// SyncInstruments 同步合约
 // POST /api/futures/sync
 func (h *FutureHandler) SyncInstruments(c *fiber.Ctx) error {
-	if err := h.eng.SyncInstruments(); err != nil {
+	if err := h.marketSvc.SyncInstruments(c.Context()); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger instrument sync"})
 	}
 	return c.JSON(fiber.Map{"Status": true, "Message": "Instrument synchronization triggered"})
 }
 
-// CleanupExpired removes expired instruments from the DB.
+// CleanupExpired 清理过期合约
 // POST /api/futures/cleanup
 func (h *FutureHandler) CleanupExpired(c *fiber.Ctx) error {
-	db := h.eng.GetPostgresClient().DB
 	now := time.Now().Format("20060102")
 
-	result := db.Where("expire_date < ? AND expire_date != ''", now).Delete(&model.Future{})
+	result := h.db.Where("expire_date < ? AND expire_date != ''", now).Delete(&model.Future{})
 	if result.Error != nil {
 		return c.Status(500).JSON(fiber.Map{"Error": "Cleanup failed: " + result.Error.Error()})
 	}
 
 	return c.JSON(fiber.Map{
-		"Status": true,
+		"Status":  true,
 		"Message": strconv.FormatInt(result.RowsAffected, 10) + " expired instruments removed",
 	})
 }

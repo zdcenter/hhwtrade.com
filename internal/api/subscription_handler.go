@@ -1,29 +1,27 @@
 package api
 
 import (
-	"log"
+	"context"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
-	"hhwtrade.com/internal/engine"
-	"hhwtrade.com/internal/model"
+	"hhwtrade.com/internal/domain"
 )
 
+// SubscriptionHandler 处理订阅相关的 HTTP 请求
 type SubscriptionHandler struct {
-	eng *engine.Engine
+	subscriptionSvc domain.SubscriptionService
 }
 
-func NewSubscriptionHandler(eng *engine.Engine) *SubscriptionHandler {
-	return &SubscriptionHandler{eng: eng}
+// NewSubscriptionHandler 创建订阅处理器
+func NewSubscriptionHandler(subscriptionSvc domain.SubscriptionService) *SubscriptionHandler {
+	return &SubscriptionHandler{subscriptionSvc: subscriptionSvc}
 }
 
-// GetSubscriptions returns the list of symbols subscribed by a user with pagination.
+// GetSubscriptions 获取用户订阅列表
 // GET /api/users/:userID/subscriptions?page=1&pageSize=10
 func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
-
-	// Pagination parameters
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("pageSize", "10"))
 
@@ -34,27 +32,15 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 		pageSize = 10
 	}
 
-	offset := (page - 1) * pageSize
-
-	var subs []model.Subscription
-	var total int64
-
-	db := h.eng.GetPostgresClient().DB
-
-	// Count total records
-	if err := db.Model(&model.Subscription{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to count subscriptions"})
-	}
-
-	// Fetch paginated data
-	if err := db.Where("user_id = ?", userID).Order("sorter ASC").Limit(pageSize).Offset(offset).Find(&subs).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to fetch subscriptions"})
+	subs, total, err := h.subscriptionSvc.GetSubscriptions(context.Background(), userID, page, pageSize)
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	return SendPaginatedResponse(c, subs, page, pageSize, total)
 }
 
-// AddSubscription adds an instrument_id to the user's subscription list.
+// AddSubscription 添加订阅
 // POST /api/users/:userID/subscriptions
 func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 	userID := c.Params("userID")
@@ -67,54 +53,25 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
-	sub := model.Subscription{
-		UserID:       userID,
-		InstrumentID: req.InstrumentID,
-		ExchangeID:   req.ExchangeID,
-	}
-
-	db := h.eng.GetPostgresClient().DB
-	// Use FirstOrCreate to avoid duplicates if unique index is hit, or handle error
-	if err := db.Create(&sub).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to add subscription", "Details": err.Error()})
-	}
-
-	// Trigger WebSocket Subscription
-	h.eng.GetWsManager().SubscribeUser(userID, req.InstrumentID)
-
-	// Trigger Engine CTP Subscription
-	if err := h.eng.SubscribeSymbol(req.InstrumentID); err != nil {
-		log.Printf("API: Failed to trigger CTP subscription for %s: %v", req.InstrumentID, err)
+	sub, err := h.subscriptionSvc.AddSubscription(context.Background(), userID, req.InstrumentID, req.ExchangeID)
+	if err != nil {
+		return handleError(c, err)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(sub)
 }
 
-// RemoveSubscription removes a symbol from the user's subscription list.
+// RemoveSubscription 移除订阅
 // DELETE /api/users/:userID/subscriptions/:symbol
 func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	userID := c.Params("userID")
-	instrumentID := c.Params("symbol") // 保持 URL param 名为 symbol 也可以，只要逻辑对
+	instrumentID := c.Params("symbol")
 
-	db := h.eng.GetPostgresClient().DB
-	result := db.Where("user_id = ? AND instrument_id = ?", userID, instrumentID).Delete(&model.Subscription{})
-
-	if result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to remove subscription"})
-	}
-	if result.RowsAffected == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"Error": "Subscription not found"})
+	err := h.subscriptionSvc.RemoveSubscription(context.Background(), userID, instrumentID)
+	if err != nil {
+		return handleError(c, err)
 	}
 
-	// Trigger WebSocket Unsubscription
-	h.eng.GetWsManager().UnsubscribeUser(userID, instrumentID)
-
-	// Trigger Engine CTP Unsubscription
-	if err := h.eng.UnsubscribeSymbol(instrumentID); err != nil {
-		log.Printf("API: Failed to trigger CTP unsubscription for %s: %v", instrumentID, err)
-	}
-
-	// --- 修改这里 ---
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"Status":       true,
 		"Message":      "Unsubscribed successfully",
@@ -122,10 +79,8 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	})
 }
 
-
-
-
-
+// ReorderSubscriptions 重新排序订阅
+// PUT /api/users/:userID/subscriptions/reorder
 func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	var req struct {
@@ -133,24 +88,13 @@ func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
-  db := h.eng.GetPostgresClient().DB
-    // 开启事务批量更新排序号
-    err := db.Transaction(func(tx *gorm.DB) error {
-        for i, symbol := range req.InstrumentIDs {
-            if err := tx.Model(&model.Subscription{}).
-                Where("user_id = ? AND instrument_id = ?", userID, symbol).
-                Update("sorter", i).Error; err != nil {
-                return err
-            }
-        }
-        return nil
-    })
-    
-    if err != nil {
-        return c.Status(500).JSON(fiber.Map{"Error": "Failed to reorder"})
-    }
-    return c.JSON(fiber.Map{"Status": true})
+	err := h.subscriptionSvc.ReorderSubscriptions(context.Background(), userID, req.InstrumentIDs)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(fiber.Map{"Status": true})
 }

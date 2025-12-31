@@ -8,201 +8,181 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"hhwtrade.com/internal/config"
+	"hhwtrade.com/internal/constants"
 	"hhwtrade.com/internal/ctp"
+	"hhwtrade.com/internal/domain"
 	"hhwtrade.com/internal/infra"
-	"hhwtrade.com/internal/strategies"
+	"hhwtrade.com/internal/service"
 )
 
-// Engine is the central monolithic service that coordinates database, redis, and websocket.
+// Engine 是一个轻量级协调器，负责：
+// 1. 启动后台进程（行情监听、交易回报监听）
+// 2. 将行情数据分发给 WebSocket 和策略服务
+// 3. 协调各服务之间的交互
 type Engine struct {
-	// cfg Global configuration
 	cfg *config.Config
 
-	// postgres client
-	pg *infra.PostgresClient
-	// rdb Redis client (used for List queues and Pub/Sub)
-	rdb *redis.Client
-
-	// hub WebSocket Hub/Manager for broadcasts and user push
+	// 基础设施
+	rdb          *redis.Client
 	websocketHub *infra.WsManager
+	ctpHandler   *ctp.Handler
 
-	// subs Subscription state (tracks user symbol subscriptions)
-	subs *SubscriptionState
+	// 业务服务 (依赖接口)
+	marketService   *service.MarketServiceImpl
+	strategyService *service.StrategyServiceImpl
 
-	// stratExec Strategy Executor
-	stratExec *strategies.Executor
-
-	// CTP Components
-	ctpClient  *ctp.Client
-	ctpHandler *ctp.Handler
+	// 上下文控制
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-// NewEngine creates a new Engine instance.
-func NewEngine(cfg *config.Config, pg *infra.PostgresClient, rdb *redis.Client, wsHub *infra.WsManager) *Engine {
-	// Initialize Strategy Executor
-	exec := strategies.NewExecutor(pg.DB)
-
-	// Initialize CTP Components
-	ctpClient := ctp.NewClient(rdb)
-	ctpHandler := ctp.NewHandler(pg.DB, wsHub)
+// NewEngine 创建引擎
+func NewEngine(
+	cfg *config.Config,
+	rdb *redis.Client,
+	websocketHub *infra.WsManager,
+	ctpHandler *ctp.Handler,
+	marketService *service.MarketServiceImpl,
+	strategyService *service.StrategyServiceImpl,
+) *Engine {
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Engine{
-		cfg:          cfg,
-		pg:           pg,
-		rdb:          rdb,
-		websocketHub: wsHub,
-		subs:         NewSubscriptionState(),
-		stratExec:    exec,
-		ctpClient:    ctpClient,
-		ctpHandler:   ctpHandler,
+		cfg:             cfg,
+		rdb:             rdb,
+		websocketHub:    websocketHub,
+		ctpHandler:      ctpHandler,
+		marketService:   marketService,
+		strategyService: strategyService,
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 }
 
-// Start initializes background processes like the market data subscriber.
-func (e *Engine) Start(ctx context.Context) {
-	log.Println("Starting Engine...")
+// Start 启动引擎后台进程
+func (e *Engine) Start() {
+	log.Println("Engine: Starting...")
 
-	// 1. Load Strategies into Memory
-	e.stratExec.LoadActiveStrategies()
+	// 1. 加载活跃策略
+	e.strategyService.LoadActiveStrategies()
 
-	// 1.1 Trigger CTP Subscriptions for Active Strategies
-	// This ensures we get data even if no UI user is watching
-	for _, instID := range e.stratExec.GetSymbols() {
-		log.Printf("Engine: Subscribing to %s for active strategies", instID)
-		e.SubscribeSymbol(instID)
+	// 2. 为活跃策略订阅行情
+	for _, symbol := range e.strategyService.GetActiveSymbols() {
+		log.Printf("Engine: Subscribing to %s for active strategies", symbol)
+		e.marketService.AddExistingSubscription(symbol)
+		if err := e.marketService.Subscribe(e.ctx, symbol); err != nil {
+			log.Printf("Engine: Failed to subscribe to %s: %v", symbol, err)
+		}
 	}
 
-	// 2. Start WebSocket Manager
+	// 3. 启动 WebSocket 管理器
 	go e.websocketHub.Start()
 
-	// 3. Start Market Data & Query Subscriber (Redis Pub/Sub)
-	infra.StartMarketDataSubscriber(e.rdb, ctx)
-	infra.StartQueryReplySubscriber(e.rdb, ctx)
+	// 4. 启动行情数据订阅器
+	infra.StartMarketDataSubscriber(e.rdb, e.ctx)
+	infra.StartQueryReplySubscriber(e.rdb, e.ctx)
 
-	// 4. Start Event Loop
-	go func() {
-		log.Println("Engine Event Loop Started")
-		for msg := range infra.MarketDataChan {
-			// A. If it's a market tick (InstrumentID is not empty)
-			if msg.Symbol != "" {
-				e.websocketHub.Broadcast(msg)
+	// 5. 启动行情分发循环
+	go e.runMarketDataLoop()
 
-				var tickData struct {
-					LastPrice float64 `json:"LastPrice"`
-				}
-				if err := json.Unmarshal([]byte(msg.Payload), &tickData); err == nil {
-					// NOTE: we keep msg.Symbol for internal websocket protocol,
-					// but strategy might want InstrumentID
-					commands := e.stratExec.OnMarketData(msg.Symbol, tickData.LastPrice)
-					for _, cmd := range commands {
-						_ = e.ctpClient.InsertOrder(context.Background(), cmd)
-					}
-				}
-			} else {
-				// B. It's a Query Response from Pub/Sub (Symbol is empty)
-				// We reuse the TradeResponse handler logic for consistency, assuming the payload structure matches
-				e.handleRawResponse(string(msg.Payload))
-			}
-		}
-	}()
+	// 6. 启动交易回报监听
+	go e.runTradeResponseLoop()
 
-	// 5. Start Trade Response Listener (CTP -> Go)
-	go e.listenTradeResponses()
-
-	log.Println("Engine started.")
+	log.Println("Engine: Started successfully")
 }
 
-// listenTradeResponses constantly consumers messages from the Redis response queue.
-func (e *Engine) listenTradeResponses() {
-	log.Println("Starting Trade Response Listener...")
-	ctx := context.Background()
-	for {
-		// BRPOP blocks until data is available. 0 means block indefinitely.
-		// Returns [key, value]
-		val, err := e.rdb.BRPop(ctx, 0, ctp.PushCtpTradeReportList).Result()
-		if err != nil {
-			log.Printf("Error popping from response queue: %v", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
+// runMarketDataLoop 行情数据分发循环
+func (e *Engine) runMarketDataLoop() {
+	log.Println("Engine: Market data loop started")
 
-		// val[1] is the JSON payload string
-		e.handleRawResponse(val[1])
+	for {
+		select {
+		case msg := <-infra.MarketDataChan:
+			e.handleMarketData(msg)
+		case <-e.ctx.Done():
+			log.Println("Engine: Market data loop stopped")
+			return
+		}
 	}
 }
 
-// handleRawResponse unmarshals the JSON and delegates to ctpHandler
-func (e *Engine) handleRawResponse(jsonStr string) {
+// handleMarketData 处理行情数据
+func (e *Engine) handleMarketData(msg infra.MarketMessage) {
+	if msg.Symbol != "" {
+		// 1. 广播给 WebSocket 客户端
+		e.websocketHub.Broadcast(msg)
+
+		// 2. 解析价格，触发策略
+		var tickData struct {
+			LastPrice float64 `json:"LastPrice"`
+		}
+		if err := json.Unmarshal([]byte(msg.Payload), &tickData); err == nil {
+			e.strategyService.OnMarketData(e.ctx, msg.Symbol, tickData.LastPrice)
+		}
+	} else {
+		// 查询响应
+		e.handleQueryResponse(msg.Payload)
+	}
+}
+
+// handleQueryResponse 处理查询响应
+func (e *Engine) handleQueryResponse(payload json.RawMessage) {
 	var resp ctp.TradeResponse
-	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
-		log.Printf("Failed to unmarshal trade response: %v", err)
+	if err := json.Unmarshal([]byte(payload), &resp); err != nil {
+		log.Printf("Engine: Failed to unmarshal query response: %v", err)
 		return
 	}
 	e.ctpHandler.ProcessResponse(resp)
 }
 
-// QueryPositions sends a command to CTP Core to fetch all positions for a user.
-func (e *Engine) QueryPositions(userID string, instrumentID string) error {
-	return e.ctpClient.QueryPositions(context.Background(), userID, instrumentID)
-}
+// runTradeResponseLoop 交易回报监听循环
+func (e *Engine) runTradeResponseLoop() {
+	log.Println("Engine: Trade response loop started")
 
-// QueryAccount sends a command to CTP Core to fetch trading account info.
-func (e *Engine) QueryAccount(userID string) error {
-	return e.ctpClient.QueryAccount(context.Background(), userID)
-}
+	for {
+		select {
+		case <-e.ctx.Done():
+			log.Println("Engine: Trade response loop stopped")
+			return
+		default:
+			// BRPOP 阻塞等待，超时 1 秒
+			val, err := e.rdb.BRPop(e.ctx, 1*time.Second, constants.RedisQueueCTPResponse).Result()
+			if err != nil {
+				if err == redis.Nil {
+					continue // 超时，继续循环
+				}
+				if e.ctx.Err() != nil {
+					return // 上下文取消
+				}
+				log.Printf("Engine: Error reading trade response: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
 
-// SyncInstruments triggers CTP Core to fetch all available instruments.
-func (e *Engine) SyncInstruments() error {
-	log.Println("Engine: Triggering Instrument Sync from CTP Core")
-	return e.ctpClient.SyncInstruments(context.Background())
-}
+			// val[1] 是 JSON 数据
+			var resp ctp.TradeResponse
+			if err := json.Unmarshal([]byte(val[1]), &resp); err != nil {
+				log.Printf("Engine: Failed to unmarshal trade response: %v", err)
+				continue
+			}
 
-// SubscribeSymbol adds a symbol to the engine's tracking and sends a subscribe command to CTP if it's new.
-func (e *Engine) SubscribeSymbol(instrumentID string) error {
-	isFirst := e.subs.AddSubscription(instrumentID)
-
-	if isFirst {
-		log.Printf("Engine: New subscription for %s, sending command to CTP", instrumentID)
-		return e.ctpClient.Subscribe(context.Background(), instrumentID)
+			e.ctpHandler.ProcessResponse(resp)
+		}
 	}
-	return nil
 }
 
-// UnsubscribeSymbol removes a symbol reference and sends an unsubscribe command if it's the last one.
-func (e *Engine) UnsubscribeSymbol(instrumentID string) error {
-	if e.subs.RemoveSubscription(instrumentID) {
-		log.Printf("Engine: No more subscribers for %s, sending unsubscribe to CTP", instrumentID)
-		return e.ctpClient.Unsubscribe(context.Background(), instrumentID)
-	}
-	return nil
+// Stop 停止引擎
+func (e *Engine) Stop() {
+	log.Println("Engine: Stopping...")
+	e.cancel()
 }
 
-// GetSubscriptionState returns the subscription state manager.
-func (e *Engine) GetSubscriptionState() *SubscriptionState {
-	return e.subs
-}
-
-// GetWsManager returns the WebSocket manager.
-func (e *Engine) GetWsManager() *infra.WsManager {
+// GetNotifier 返回 WebSocket 通知器 (实现 domain.Notifier 接口)
+func (e *Engine) GetNotifier() domain.Notifier {
 	return e.websocketHub
 }
 
-// GetRedisClient returns the Redis client.
-func (e *Engine) GetRedisClient() *redis.Client {
-	return e.rdb
+// GetWebSocketHub 返回 WebSocket 管理器
+func (e *Engine) GetWebSocketHub() *infra.WsManager {
+	return e.websocketHub
 }
-
-func (e *Engine) GetConfig() *config.Config {
-	return e.cfg
-}
-
-func (e *Engine) GetPostgresClient() *infra.PostgresClient {
-	return e.pg
-}
-
-func (e *Engine) GetCtpClient() *ctp.Client {
-	return e.ctpClient
-}
-
-
-

@@ -4,49 +4,74 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 	"hhwtrade.com/internal/api/middleware"
 	"hhwtrade.com/internal/auth"
 	"hhwtrade.com/internal/config"
-	"hhwtrade.com/internal/engine"
+	"hhwtrade.com/internal/domain"
+	"hhwtrade.com/internal/infra"
 )
 
 // Router 负责注册所有路由
 type Router struct {
 	app    *fiber.App
 	cfg    *config.Config
-	eng    *engine.Engine
+	db     *gorm.DB
+	wsHub  *infra.WsManager
 	router fiber.Router // /api group
+
+	// 服务层依赖
+	subscriptionSvc domain.SubscriptionService
+	tradingSvc      domain.TradingService
+	strategySvc     domain.StrategyService
+	marketSvc       domain.MarketService
 }
 
-func NewRouter(app *fiber.App, cfg *config.Config, eng *engine.Engine) *Router {
+// RouterDeps 路由器依赖
+type RouterDeps struct {
+	App             *fiber.App
+	Cfg             *config.Config
+	DB              *gorm.DB
+	WsHub           *infra.WsManager
+	SubscriptionSvc domain.SubscriptionService
+	TradingSvc      domain.TradingService
+	StrategySvc     domain.StrategyService
+	MarketSvc       domain.MarketService
+}
+
+// NewRouter 创建路由器
+func NewRouter(deps RouterDeps) *Router {
 	return &Router{
-		app: app,
-		cfg: cfg,
-		eng: eng,
+		app:             deps.App,
+		cfg:             deps.Cfg,
+		db:              deps.DB,
+		wsHub:           deps.WsHub,
+		subscriptionSvc: deps.SubscriptionSvc,
+		tradingSvc:      deps.TradingSvc,
+		strategySvc:     deps.StrategySvc,
+		marketSvc:       deps.MarketSvc,
 	}
 }
 
 // RegisterRoutes 注册所有业务路由
 func (r *Router) RegisterRoutes() {
 	// 1. 初始化鉴权与中间件
-	// Initialize Casbin Enforcer
-	enforcer, err := auth.InitCasbin(r.eng.GetPostgresClient().DB)
+	enforcer, err := auth.InitCasbin(r.db)
 	if err != nil {
 		log.Fatalf("Failed to initialize Casbin: %v", err)
 	}
 
-	// 2. 初始化各个 Handler
-	authHandler := NewAuthHandler(r.eng.GetPostgresClient().DB, r.cfg)
-	subHandler := NewSubscriptionHandler(r.eng)
-	strategyHandler := NewStrategyHandler(r.eng)
-	futureHandler := NewFutureHandler(r.eng)
-	tradeHandler := NewTradeHandler(r.eng)
+	// 2. 初始化各个 Handler (依赖接口)
+	authHandler := NewAuthHandler(r.db, r.cfg)
+	subHandler := NewSubscriptionHandler(r.subscriptionSvc)
+	strategyHandler := NewStrategyHandler(r.strategySvc)
+	futureHandler := NewFutureHandler(r.db, r.marketSvc)
+	tradeHandler := NewTradeHandler(r.tradingSvc)
 
 	// 3. 注册 WebSocket 路由 (不需要 JWT 中间件)
-	InitWebsocket(r.app, r.eng)
+	InitWebsocketWithHub(r.app, r.wsHub)
 
 	// 4. 注册公开路由 (Public)
-	// Health Check
 	r.app.Get("/health", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
 			"status":  "ok",
@@ -57,31 +82,28 @@ func (r *Router) RegisterRoutes() {
 	// Auth Public Routes
 	r.app.Post("/auth/register", authHandler.Register)
 	r.app.Post("/auth/login", authHandler.Login)
-	authHandler.EnsureAdminUser() // Ensure admin exists
+	authHandler.EnsureAdminUser()
 
 	// 5. 注册受保护的 API 路由 (Protected /api)
 	r.router = r.app.Group("/api")
-	// Apply RBAC/JWT Middleware
-	// Note: For now we use the same hardcoded secret "hhwtrade-secret-key-2025" used in AuthHandler.
-	jwtSecret := "hhwtrade-secret-key-2025" 
+	jwtSecret := "hhwtrade-secret-key-2025"
 	r.router.Use(middleware.CasbinMiddleware(enforcer, jwtSecret))
 
 	// 分组注册子路由
-	r.registerUserRoutes(subHandler, strategyHandler, tradeHandler) // Subscription, Strategy, Trade (User-scoped)
-	r.registerMarketRoutes(futureHandler)                           // Market Data logic
-	r.registerTradeRoutes(tradeHandler)                             // Direct Trade actions
-	r.registerStrategyRoutes(strategyHandler)                       // Strategy Management
-	r.registerAuthRoutes(authHandler)                               // Me, Logout
+	r.registerUserRoutes(subHandler, strategyHandler, tradeHandler)
+	r.registerMarketRoutes(futureHandler)
+	r.registerTradeRoutes(tradeHandler)
+	r.registerStrategyRoutes(strategyHandler)
+	r.registerAuthRoutes(authHandler)
 }
 
 func (r *Router) registerUserRoutes(sub *SubscriptionHandler, strat *StrategyHandler, trade *TradeHandler) {
-	// User Sub-resources
 	users := r.router.Group("/users/:userID")
-	
+
 	// Subscriptions
 	users.Get("/subscriptions", sub.GetSubscriptions)
 	users.Post("/subscriptions", sub.AddSubscription)
-	users.Put("/subscriptions/reorder", sub.ReorderSubscriptions) // Note: this might need check if user ID matches param
+	users.Put("/subscriptions/reorder", sub.ReorderSubscriptions)
 	users.Delete("/subscriptions/:symbol", sub.RemoveSubscription)
 
 	// Strategies
