@@ -66,6 +66,9 @@ func main() {
 
 	// 4.5 订阅服务
 	subscriptionService := service.NewSubscriptionService(pg.DB, marketService, wsHub)
+	if err := subscriptionService.RestoreSubscriptions(context.Background()); err != nil {
+		log.Printf("Warning: Failed to restore subscriptions: %v", err)
+	}
 
 	// ============================================
 	// 5. 初始化引擎 (协调器)
@@ -81,6 +84,13 @@ func main() {
 
 	// 启动引擎后台进程
 	eng.Start()
+
+	// ============================================
+	// 5.1 启动行情分发器 (新架构)
+	// ============================================
+	// 负责将 Redis 行情分发给 WebSocket (UI) 和 Engine (策略)
+	dispatcher := infra.NewMarketDataDispatcher(wsHub, eng)
+	go dispatcher.Start()
 
 	// ============================================
 	// 6. 初始化 HTTP 服务器

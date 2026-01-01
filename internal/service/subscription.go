@@ -55,6 +55,13 @@ func (s *SubscriptionServiceImpl) GetSubscriptions(ctx context.Context, userID s
 		return nil, 0, domain.NewInternalError("failed to fetch subscriptions", err)
 	}
 
+	// 确保 WebSocket 路由同步 (如果用户刚连接 WS，可能需要显式修复路由)
+	if s.notifier != nil {
+		for _, sub := range subs {
+			s.notifier.SubscribeUser(userID, sub.InstrumentID)
+		}
+	}
+
 	return subs, total, nil
 }
 
@@ -133,6 +140,51 @@ func (s *SubscriptionServiceImpl) ReorderSubscriptions(ctx context.Context, user
 		}
 		return nil
 	})
+}
+
+// RestoreSubscriptions 恢复所有已存储的订阅 (用于启动时)
+func (s *SubscriptionServiceImpl) RestoreSubscriptions(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. 查找所有被订阅的合约 (去重)
+	var instrumentIDs []string
+	if err := s.db.Model(&model.Subscription{}).Distinct("instrument_id").Pluck("instrument_id", &instrumentIDs).Error; err != nil {
+		return domain.NewInternalError("failed to fetch distinct subscriptions", err)
+	}
+
+	if len(instrumentIDs) == 0 {
+		return nil
+	}
+
+	log.Printf("SubscriptionService: Restoring %d distinct subscriptions...", len(instrumentIDs))
+
+	// 2. 统计每个合约的订阅数 (为了准确恢复 MarketService 的引用计数)
+	type Result struct {
+		InstrumentID string
+		Count        int
+	}
+	var results []Result
+	if err := s.db.Model(&model.Subscription{}).Select("instrument_id, count(*) as count").Group("instrument_id").Scan(&results).Error; err != nil {
+		return domain.NewInternalError("failed to count subscriptions", err)
+	}
+
+	// 3. 恢复 MarketService 状态
+	if s.marketService != nil {
+		for _, res := range results {
+			log.Printf("SubscriptionService: Restoring %s (count: %d)", res.InstrumentID, res.Count)
+			// 恢复引用计数
+			for i := 0; i < res.Count; i++ {
+				s.marketService.AddExistingSubscription(res.InstrumentID)
+			}
+			// 触发 CTP 订阅 (MarketService 内部会判断去重)
+			if err := s.marketService.Subscribe(ctx, res.InstrumentID); err != nil {
+				log.Printf("SubscriptionService: Failed to restore CTP subscription for %s: %v", res.InstrumentID, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // 确保实现了接口

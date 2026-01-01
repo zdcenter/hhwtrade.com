@@ -8,6 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"hhwtrade.com/internal/constants"
+	"hhwtrade.com/internal/domain"
 )
 
 // MarketMessage is used for internal routing between Redis and WebSocket/Engine.
@@ -101,6 +102,27 @@ func StartQueryReplySubscriber(rdb *redis.Client, ctx context.Context) {
 			case MarketDataChan <- message:
 			default:
 				log.Println("Warning: MarketDataChan is full, dropping query reply")
+			}
+		}
+	}()
+}
+
+// StartStatusSubscriber starts a goroutine to listen for CTP Core status updates.
+func StartStatusSubscriber(rdb *redis.Client, marketService domain.MarketService, ctx context.Context) {
+	pubsub := rdb.Subscribe(ctx, constants.RedisPubSubStatus)
+
+	ch := pubsub.Channel()
+
+	go func() {
+		defer pubsub.Close()
+		log.Println("Started Status Subscriber Loop")
+		for msg := range ch {
+			payload := strings.TrimSpace(msg.Payload)
+			if payload == constants.StatusConnected {
+				log.Println("Received CTP Connected status. Triggering resubscription...")
+				if err := marketService.ResubscribeAll(ctx); err != nil {
+					log.Printf("Failed to resubscribe: %v", err)
+				}
 			}
 		}
 	}()

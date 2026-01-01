@@ -16,4 +16,10 @@ const (
 
 	// RedisPubSubQuery 查询结果频道
 	RedisPubSubQuery = "ctp_query_returns"
+
+	// RedisPubSubStatus CTP 核心状态频道 (用于重启恢复)
+	RedisPubSubStatus = "ctp.status"
+
+	// StatusConnected CTP 已连接状态消息
+	StatusConnected = "connected"
 )

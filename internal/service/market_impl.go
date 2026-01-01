@@ -90,6 +90,26 @@ func (s *MarketServiceImpl) AddExistingSubscription(instrumentID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[instrumentID]++
+	s.subscriptions[instrumentID]++
+}
+
+// ResubscribeAll 重新订阅所有活跃合约
+func (s *MarketServiceImpl) ResubscribeAll(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	log.Printf("MarketService: Resubscribing to %d instruments...", len(s.subscriptions))
+
+	for instrumentID, count := range s.subscriptions {
+		if count > 0 {
+			log.Printf("MarketService: Re-subscribing to %s", instrumentID)
+			if err := s.ctpClient.Subscribe(ctx, instrumentID); err != nil {
+				log.Printf("MarketService: Failed to re-subscribe to %s: %v", instrumentID, err)
+				// Continue with other subscriptions even if one fails
+			}
+		}
+	}
+	return nil
 }
 
 // 确保实现了接口

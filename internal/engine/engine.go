@@ -81,9 +81,10 @@ func (e *Engine) Start() {
 	// 4. 启动行情数据订阅器
 	infra.StartMarketDataSubscriber(e.rdb, e.ctx)
 	infra.StartQueryReplySubscriber(e.rdb, e.ctx)
+	infra.StartStatusSubscriber(e.rdb, e.marketService, e.ctx)
 
-	// 5. 启动行情分发循环
-	go e.runMarketDataLoop()
+	// 5. (已移除) 启动行情分发循环 (由 Dispatcher 接管)
+	// go e.runMarketDataLoop()
 
 	// 6. 启动交易回报监听
 	go e.runTradeResponseLoop()
@@ -91,26 +92,10 @@ func (e *Engine) Start() {
 	log.Println("Engine: Started successfully")
 }
 
-// runMarketDataLoop 行情数据分发循环
-func (e *Engine) runMarketDataLoop() {
-	log.Println("Engine: Market data loop started")
-
-	for {
-		select {
-		case msg := <-infra.MarketDataChan:
-			e.handleMarketData(msg)
-		case <-e.ctx.Done():
-			log.Println("Engine: Market data loop stopped")
-			return
-		}
-	}
-}
-
-// handleMarketData 处理行情数据
-func (e *Engine) handleMarketData(msg infra.MarketMessage) {
+// OnMarketData 接收并处理行情数据 (由 Dispatcher 调用)
+func (e *Engine) OnMarketData(msg infra.MarketMessage) {
 	if msg.Symbol != "" {
-		// 1. 广播给 WebSocket 客户端
-		e.websocketHub.Broadcast(msg)
+		// 1. (原逻辑中此处为广播 websocket，现已移除，专注策略)
 
 		// 2. 解析价格，触发策略
 		var tickData struct {

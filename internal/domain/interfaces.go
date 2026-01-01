@@ -20,6 +20,8 @@ type SubscriptionService interface {
 	RemoveSubscription(ctx context.Context, userID, instrumentID string) error
 	// 重新排序订阅
 	ReorderSubscriptions(ctx context.Context, userID string, instrumentIDs []string) error
+	// 恢复所有已存储的订阅 (用于启动时)
+	RestoreSubscriptions(ctx context.Context) error
 }
 
 // ===========================
@@ -36,6 +38,10 @@ type MarketService interface {
 	GetActiveSymbols() []string
 	// 同步合约信息
 	SyncInstruments(ctx context.Context) error
+	// 添加已存在的订阅 (用于恢复)
+	AddExistingSubscription(instrumentID string)
+	// 重新订阅所有活跃合约 (用于 CTP 重启恢复)
+	ResubscribeAll(ctx context.Context) error
 }
 
 // ===========================
