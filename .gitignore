@@ -1,0 +1,45 @@
+# Binaries
+# binary names might vary
+main
+fiber_api
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Output directories
+/bin/
+/dist/
+/build/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor directory (uncomment if you don't want to commit vendor)
+# vendor/
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Sensitive config files (template usually committed as config.yaml.example)
+# config.yaml
+# .env
