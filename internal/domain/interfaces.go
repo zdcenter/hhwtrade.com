@@ -12,14 +12,14 @@ import (
 
 // SubscriptionService 定义订阅相关的业务操作
 type SubscriptionService interface {
-	// 获取用户订阅列表
-	GetSubscriptions(ctx context.Context, userID string, page, pageSize int) ([]model.Subscription, int64, error)
+	// 获取订阅列表
+	GetSubscriptions(ctx context.Context, page, pageSize int) ([]model.Subscription, int64, error)
 	// 添加订阅
-	AddSubscription(ctx context.Context, userID, instrumentID, exchangeID string) (*model.Subscription, error)
+	AddSubscription(ctx context.Context, instrumentID, exchangeID string) (*model.Subscription, error)
 	// 移除订阅
-	RemoveSubscription(ctx context.Context, userID, instrumentID string) error
+	RemoveSubscription(ctx context.Context, instrumentID string) error
 	// 重新排序订阅
-	ReorderSubscriptions(ctx context.Context, userID string, instrumentIDs []string) error
+	ReorderSubscriptions(ctx context.Context, instrumentIDs []string) error
 	// 恢复所有已存储的订阅 (用于启动时)
 	RestoreSubscriptions(ctx context.Context) error
 }
@@ -96,14 +96,10 @@ type StrategyService interface {
 
 // Notifier 定义推送通知的接口
 type Notifier interface {
-	// 推送给指定用户
-	PushToUser(userID string, data interface{})
+	// 广播消息给所有连接的客户端 (用于系统通知/交易回报)
+	BroadcastToAll(data interface{})
 	// 广播行情数据
 	BroadcastMarketData(data interface{})
-	// 订阅用户到指定合约
-	SubscribeUser(userID, symbol string)
-	// 取消用户订阅
-	UnsubscribeUser(userID, symbol string)
 }
 
 // ===========================

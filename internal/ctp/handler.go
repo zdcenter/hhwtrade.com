@@ -6,22 +6,18 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"hhwtrade.com/internal/domain"
 	"hhwtrade.com/internal/model"
 )
-
-// Notifier defines the interface for pushing updates to users (e.g., via WebSocket).
-type Notifier interface {
-	PushToUser(userID string, data interface{})
-}
 
 // Handler processes incoming CTP responses using the database and notifier.
 type Handler struct {
 	db       *gorm.DB
-	notifier Notifier
+	notifier domain.Notifier
 }
 
 // NewHandler creates a new CTP Response Handler.
-func NewHandler(db *gorm.DB, notifier Notifier) *Handler {
+func NewHandler(db *gorm.DB, notifier domain.Notifier) *Handler {
 	return &Handler{
 		db:       db,
 		notifier: notifier,
@@ -250,6 +246,7 @@ func (h *Handler) updatePosition(order model.Order, tradePayload map[string]inte
 
 func (h *Handler) notifyUser(userID string, data interface{}) {
 	if h.notifier != nil {
-		h.notifier.PushToUser(userID, data)
+		_ = userID
+		h.notifier.BroadcastToAll(data)
 	}
 }

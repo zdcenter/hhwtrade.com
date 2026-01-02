@@ -18,10 +18,9 @@ func NewSubscriptionHandler(subscriptionSvc domain.SubscriptionService) *Subscri
 	return &SubscriptionHandler{subscriptionSvc: subscriptionSvc}
 }
 
-// GetSubscriptions 获取用户订阅列表
-// GET /api/users/:userID/subscriptions?page=1&pageSize=10
+// GetSubscriptions 获取订阅列表
+// GET /api/subscriptions?page=1&pageSize=10
 func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
-	userID := c.Params("userID")
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("pageSize", "10"))
 
@@ -32,7 +31,7 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 		pageSize = 10
 	}
 
-	subs, total, err := h.subscriptionSvc.GetSubscriptions(context.Background(), userID, page, pageSize)
+	subs, total, err := h.subscriptionSvc.GetSubscriptions(context.Background(), page, pageSize)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -41,9 +40,8 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 }
 
 // AddSubscription 添加订阅
-// POST /api/users/:userID/subscriptions
+// POST /api/subscriptions
 func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
-	userID := c.Params("userID")
 	var req struct {
 		InstrumentID string `json:"InstrumentID"`
 		ExchangeID   string `json:"ExchangeID"`
@@ -53,7 +51,7 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
-	sub, err := h.subscriptionSvc.AddSubscription(context.Background(), userID, req.InstrumentID, req.ExchangeID)
+	sub, err := h.subscriptionSvc.AddSubscription(context.Background(), req.InstrumentID, req.ExchangeID)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -62,12 +60,11 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 }
 
 // RemoveSubscription 移除订阅
-// DELETE /api/users/:userID/subscriptions/:symbol
+// DELETE /api/subscriptions/:symbol
 func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
-	userID := c.Params("userID")
 	instrumentID := c.Params("symbol")
 
-	err := h.subscriptionSvc.RemoveSubscription(context.Background(), userID, instrumentID)
+	err := h.subscriptionSvc.RemoveSubscription(context.Background(), instrumentID)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -80,9 +77,8 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 }
 
 // ReorderSubscriptions 重新排序订阅
-// PUT /api/users/:userID/subscriptions/reorder
+// PUT /api/subscriptions/reorder
 func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
-	userID := c.Params("userID")
 	var req struct {
 		InstrumentIDs []string `json:"InstrumentIDs"`
 	}
@@ -91,7 +87,7 @@ func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
 	}
 
-	err := h.subscriptionSvc.ReorderSubscriptions(context.Background(), userID, req.InstrumentIDs)
+	err := h.subscriptionSvc.ReorderSubscriptions(context.Background(), req.InstrumentIDs)
 	if err != nil {
 		return handleError(c, err)
 	}

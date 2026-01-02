@@ -16,6 +16,7 @@ type Config struct {
 type ServerConfig struct {
 	Port    string
 	AppName string `mapstructure:"app_name"`
+	JwtSecret string `mapstructure:"jwt_secret"`
 }
 
 type DatabaseConfig struct {

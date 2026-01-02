@@ -1,6 +1,7 @@
 server:
   port: ":3000"
   app_name: "systradex"
+  jwt_secret: "hhwtrade-secret-key-2025"  
 
 database:
   host: "localhost"

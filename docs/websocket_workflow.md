@@ -31,26 +31,16 @@ type WsManager struct {
     // 所有活跃的客户端
     clients map[*WsClient]bool
 
-    // 订阅表: Symbol -> 客户端集合
-    // 例如: "rb2505" -> {client1, client2, client3}
-    subscriptions map[string]map[*WsClient]bool
-
-    // 用户映射: UserID -> 客户端集合
-    // 例如: "user123" -> {client1, client2} (同一用户多个浏览器标签页)
-    userConns map[string]map[*WsClient]bool
-
     mu sync.RWMutex        // 保护并发读写
 
-    Register   chan *RegisterReq  // 注册通道
-    Unregister chan *WsClient     // 注销通道
+    Register   chan *WsClient  // 注册通道
+    Unregister chan *WsClient  // 注销通道
 }
 ```
 
-**三层映射关系：**
+**一层映射关系：**
 ```
 clients:       存储所有连接（用于全局广播）
-subscriptions: 按合约代码分组（用于行情推送）
-userConns:     按用户ID分组（用于私有消息推送，如成交通知）
 ```
 
 ### 1.3 MarketMessage - 行情消息
@@ -76,18 +66,17 @@ var MarketDataChan = make(chan MarketMessage, 10000)
 ```
 Angular                    Go WebSocket Handler           WsManager
    |                              |                           |
-   |--- ws://host/ws?userID=xxx ->|                           |
+   |--- ws://host/ws ------------>|                           |
    |                              |                           |
    |                              |-- NewWsClient(conn) ----->|
    |                              |   创建 WsClient           |
    |                              |   启动 writeLoop 协程     |
    |                              |                           |
    |                              |-- Register 通道 --------->|
-   |                              |   {Client, UserID}        |
+   |                              |   Client                  |
    |                              |                           |
    |                              |                    更新数据结构:
    |                              |                    clients[client] = true
-   |                              |                    userConns[userID][client] = true
    |                              |                           |
    |<---- 连接建立确认 -----------|                           |
 ```
@@ -97,22 +86,16 @@ Angular                    Go WebSocket Handler           WsManager
 **初始状态（无连接）：**
 ```go
 clients:       {}
-subscriptions: {}
-userConns:     {}
 ```
 
-**用户 "user001" 连接后：**
+**一个连接建立后：**
 ```go
 clients:       {client1: true}
-subscriptions: {}
-userConns:     {"user001": {client1: true}}
 ```
 
-**同一用户打开第二个浏览器标签页：**
+**再建立第二个连接：**
 ```go
 clients:       {client1: true, client2: true}
-subscriptions: {}
-userConns:     {"user001": {client1: true, client2: true}}
 ```
 
 ---
@@ -131,46 +114,29 @@ userConns:     {"user001": {client1: true, client2: true}}
 ### 3.2 订阅时序图
 
 ```
-Angular                WsHandler                    WsManager              MarketService
+Angular                WsHandler
    |                      |                            |                        |
    |-- subscribe rb2505 ->|                            |                        |
    |                      |                            |                        |
-   |                      |-- Subscribe(client, rb2505)|                        |
-   |                      |                            |                        |
-   |                      |                     更新 subscriptions:             |
-   |                      |                     subscriptions["rb2505"][client] = true
-   |                      |                            |                        |
-   |                      |-- MarketSvc.Subscribe() -->|----------------------->|
-   |                      |                            |                        |
-   |                      |                            |           通过 CTPClient 发送
-   |                      |                            |           Redis 命令到 CTP Core
-   |                      |                            |                        |
+说明：在“全量广播”模型下，WebSocket 的 subscribe/unsubscribe 消息会被服务端忽略。
+全局订阅由 HTTP 订阅管理接口（写入 DB）驱动；只要某合约被全局订阅，其行情到达后会广播给所有连接。
 ```
 
 ### 3.3 数据结构变化
 
-**订阅 "rb2505" 后：**
+**订阅 "rb2505" 后（全局订阅，不影响 WsManager 连接结构）：**
 ```go
 clients:       {client1: true}
-subscriptions: {"rb2505": {client1: true}}
-userConns:     {"user001": {client1: true}}
 ```
 
-**client2 也订阅 "rb2505"：**
+**client2 也连接后：**
 ```go
 clients:       {client1: true, client2: true}
-subscriptions: {"rb2505": {client1: true, client2: true}}
-userConns:     {"user001": {client1: true, client2: true}}
 ```
 
-**client1 订阅 "ag2506"：**
+**全局再订阅 "ag2506"（不影响 WsManager 连接结构）：**
 ```go
 clients:       {client1: true, client2: true}
-subscriptions: {
-    "rb2505": {client1: true, client2: true},
-    "ag2506": {client1: true}
-}
-userConns:     {"user001": {client1: true, client2: true}}
 ```
 
 ---
@@ -261,14 +227,8 @@ func (m *WsManager) Broadcast(msg MarketMessage) {
     m.mu.RLock()
     defer m.mu.RUnlock()
 
-    // 查找订阅了该合约的所有客户端
-    subscribers, ok := m.subscriptions[msg.Symbol]
-    if !ok {
-        return  // 没人订阅就不发送
-    }
-
-    // 向每个订阅者发送
-    for client := range subscribers {
+    // 向每个连接发送（全量广播）
+    for client := range m.clients {
         client.Send(msg.Payload)  // 发送原始 JSON
     }
 }
@@ -341,9 +301,7 @@ Angular                    Go WsHandler              WsManager
    |                              |                      |
    |                              |               清理操作:
    |                              |               1. delete(clients, client)
-   |                              |               2. 遍历 userConns 删除
-   |                              |               3. 遍历 subscriptions 删除
-   |                              |               4. client.Close()
+   |                              |               2. client.Close()
    |                              |                      |
    |                              |-- MarketSvc.Unsubscribe() (可选)
    |                              |                      |
@@ -354,44 +312,21 @@ Angular                    Go WsHandler              WsManager
 **清理前：**
 ```go
 clients:       {client1: true, client2: true}
-subscriptions: {"rb2505": {client1: true, client2: true}}
-userConns:     {"user001": {client1: true, client2: true}}
 ```
 
 **client1 断开后：**
 ```go
 clients:       {client2: true}
-subscriptions: {"rb2505": {client2: true}}
-userConns:     {"user001": {client2: true}}
 ```
 
 ---
 
-## 6. 私有消息推送 (成交通知等)
+## 6. 交易回报/系统事件推送
 
-### 6.1 推送接口
+在单交易账号 + 全局订阅模型下：
 
-```go
-// 推送给特定用户的所有连接
-func (m *WsManager) PushToUser(userID string, msg interface{}) {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
-
-    clients, ok := m.userConns[userID]
-    if !ok {
-        return
-    }
-
-    for client := range clients {
-        client.Send(msg)
-    }
-}
-```
-
-### 6.2 使用场景
-- 订单成交通知
-- 持仓变化通知
-- 账户资金变化通知
+- 订单/成交/错误等交易回报（由 `ctp.Handler` 处理）会通过 `WsManager.BroadcastToAll()` 广播给所有连接。
+- 如果未来需要按用户隔离推送，可再引入 userConns，但当前架构选择保持简单。
 
 ---
 
@@ -413,8 +348,7 @@ func (m *WsManager) PushToUser(userID string, msg interface{}) {
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         WsManager (Hub)                              │   │
 │  │  clients: map[*WsClient]bool                                        │   │
-│  │  subscriptions: map[symbol]map[*WsClient]bool                       │   │
-│  │  userConns: map[userID]map[*WsClient]bool                           │   │
+│  │  (全量广播模型：不维护 subscriptions)                                │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                            ▲                                                 │
 │                            │ Broadcast()                                     │

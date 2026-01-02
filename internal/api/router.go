@@ -86,7 +86,7 @@ func (r *Router) RegisterRoutes() {
 
 	// 5. 注册受保护的 API 路由 (Protected /api)
 	r.router = r.app.Group("/api")
-	jwtSecret := "hhwtrade-secret-key-2025"
+	jwtSecret := r.cfg.Server.JwtSecret	
 	r.router.Use(middleware.CasbinMiddleware(enforcer, jwtSecret))
 
 	// 分组注册子路由
@@ -98,13 +98,13 @@ func (r *Router) RegisterRoutes() {
 }
 
 func (r *Router) registerUserRoutes(sub *SubscriptionHandler, strat *StrategyHandler, trade *TradeHandler) {
-	users := r.router.Group("/users/:userID")
+	// Global Subscriptions
+	r.router.Get("/subscriptions", sub.GetSubscriptions)
+	r.router.Post("/subscriptions", sub.AddSubscription)
+	r.router.Put("/subscriptions/reorder", sub.ReorderSubscriptions)
+	r.router.Delete("/subscriptions/:symbol", sub.RemoveSubscription)
 
-	// Subscriptions
-	users.Get("/subscriptions", sub.GetSubscriptions)
-	users.Post("/subscriptions", sub.AddSubscription)
-	users.Put("/subscriptions/reorder", sub.ReorderSubscriptions)
-	users.Delete("/subscriptions/:symbol", sub.RemoveSubscription)
+	users := r.router.Group("/users/:userID")
 
 	// Strategies
 	users.Get("/strategies", strat.GetStrategies)

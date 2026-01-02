@@ -33,8 +33,8 @@ func NewSubscriptionService(
 	}
 }
 
-// GetSubscriptions 获取用户订阅列表
-func (s *SubscriptionServiceImpl) GetSubscriptions(ctx context.Context, userID string, page, pageSize int) ([]model.Subscription, int64, error) {
+// GetSubscriptions 获取订阅列表
+func (s *SubscriptionServiceImpl) GetSubscriptions(ctx context.Context, page, pageSize int) ([]model.Subscription, int64, error) {
 	var subs []model.Subscription
 	var total int64
 
@@ -42,12 +42,12 @@ func (s *SubscriptionServiceImpl) GetSubscriptions(ctx context.Context, userID s
 	offset := (page - 1) * pageSize
 
 	// 统计总数
-	if err := s.db.Model(&model.Subscription{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
+	if err := s.db.Model(&model.Subscription{}).Count(&total).Error; err != nil {
 		return nil, 0, domain.NewInternalError("failed to count subscriptions", err)
 	}
 
 	// 查询数据
-	if err := s.db.Where("user_id = ?", userID).
+	if err := s.db.
 		Order("sorter ASC").
 		Limit(pageSize).
 		Offset(offset).
@@ -55,23 +55,22 @@ func (s *SubscriptionServiceImpl) GetSubscriptions(ctx context.Context, userID s
 		return nil, 0, domain.NewInternalError("failed to fetch subscriptions", err)
 	}
 
-	// 确保 WebSocket 路由同步 (如果用户刚连接 WS，可能需要显式修复路由)
-	if s.notifier != nil {
-		for _, sub := range subs {
-			s.notifier.SubscribeUser(userID, sub.InstrumentID)
-		}
-	}
-
 	return subs, total, nil
 }
 
 // AddSubscription 添加订阅
-func (s *SubscriptionServiceImpl) AddSubscription(ctx context.Context, userID, instrumentID, exchangeID string) (*model.Subscription, error) {
+func (s *SubscriptionServiceImpl) AddSubscription(ctx context.Context, instrumentID, exchangeID string) (*model.Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 检查是否已经存在
+	var count int64
+	s.db.Model(&model.Subscription{}).Where("instrument_id = ?", instrumentID).Count(&count)
+	if count > 0 {
+		return nil, domain.NewConflictError("Subscription already exists")
+	}
+
 	sub := model.Subscription{
-		UserID:       userID,
 		InstrumentID: instrumentID,
 		ExchangeID:   exchangeID,
 	}
@@ -81,30 +80,24 @@ func (s *SubscriptionServiceImpl) AddSubscription(ctx context.Context, userID, i
 		return nil, domain.NewInternalError("failed to add subscription", err)
 	}
 
-	// 2. 订阅 WebSocket 推送
-	if s.notifier != nil {
-		s.notifier.SubscribeUser(userID, instrumentID)
-	}
-
-	// 3. 触发 CTP 订阅
+	// 2. 触发 CTP 订阅
 	if s.marketService != nil {
 		if err := s.marketService.Subscribe(ctx, instrumentID); err != nil {
 			log.Printf("SubscriptionService: Failed to subscribe to CTP: %v", err)
-			// 不回滚数据库操作，CTP 订阅失败不影响用户订阅记录
 		}
 	}
 
-	log.Printf("SubscriptionService: User %s subscribed to %s", userID, instrumentID)
+	log.Printf("SubscriptionService: Subscribed to %s", instrumentID)
 	return &sub, nil
 }
 
 // RemoveSubscription 移除订阅
-func (s *SubscriptionServiceImpl) RemoveSubscription(ctx context.Context, userID, instrumentID string) error {
+func (s *SubscriptionServiceImpl) RemoveSubscription(ctx context.Context, instrumentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// 1. 从数据库删除
-	result := s.db.Where("user_id = ? AND instrument_id = ?", userID, instrumentID).Delete(&model.Subscription{})
+	result := s.db.Where("instrument_id = ?", instrumentID).Delete(&model.Subscription{})
 	if result.Error != nil {
 		return domain.NewInternalError("failed to remove subscription", result.Error)
 	}
@@ -112,28 +105,24 @@ func (s *SubscriptionServiceImpl) RemoveSubscription(ctx context.Context, userID
 		return domain.NewNotFoundError("subscription not found")
 	}
 
-	// 2. 取消 WebSocket 推送
-	if s.notifier != nil {
-		s.notifier.UnsubscribeUser(userID, instrumentID)
-	}
-
-	// 3. 触发 CTP 取消订阅
+	// 2. 触发 CTP 取消订阅
+	// 只有当没有任何订阅时才取消? 这里现在是全局订阅，删了就真删了
 	if s.marketService != nil {
 		if err := s.marketService.Unsubscribe(ctx, instrumentID); err != nil {
 			log.Printf("SubscriptionService: Failed to unsubscribe from CTP: %v", err)
 		}
 	}
 
-	log.Printf("SubscriptionService: User %s unsubscribed from %s", userID, instrumentID)
+	log.Printf("SubscriptionService: Unsubscribed from %s", instrumentID)
 	return nil
 }
 
 // ReorderSubscriptions 重新排序订阅
-func (s *SubscriptionServiceImpl) ReorderSubscriptions(ctx context.Context, userID string, instrumentIDs []string) error {
+func (s *SubscriptionServiceImpl) ReorderSubscriptions(ctx context.Context, instrumentIDs []string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		for i, symbol := range instrumentIDs {
 			if err := tx.Model(&model.Subscription{}).
-				Where("user_id = ? AND instrument_id = ?", userID, symbol).
+				Where("instrument_id = ?", symbol).
 				Update("sorter", i).Error; err != nil {
 				return domain.NewInternalError("failed to reorder subscriptions", err)
 			}

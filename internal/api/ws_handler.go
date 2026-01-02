@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"log"
 
 	"github.com/gofiber/contrib/websocket"
@@ -9,8 +8,39 @@ import (
 	"gorm.io/gorm"
 	"hhwtrade.com/internal/domain"
 	"hhwtrade.com/internal/infra"
-	"hhwtrade.com/internal/model"
 )
+
+func shouldLogWsReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Normal closures / client navigation / browser tab close.
+	// 1005 is "no status" (often seen when client closes without a close frame).
+	if websocket.IsCloseError(
+		err,
+		websocket.CloseNormalClosure,
+		websocket.CloseGoingAway,
+		websocket.CloseNoStatusReceived,
+		websocket.CloseAbnormalClosure,
+	) {
+		return false
+	}
+
+	// Close frames with other codes are worth logging.
+	if websocket.IsUnexpectedCloseError(
+		err,
+		websocket.CloseNormalClosure,
+		websocket.CloseGoingAway,
+		websocket.CloseNoStatusReceived,
+		websocket.CloseAbnormalClosure,
+	) {
+		return true
+	}
+
+	// For other errors (io.EOF etc.), don't spam logs; treat as normal disconnect.
+	return false
+}
 
 type WsRequest struct {
 	Action       string `json:"Action"`
@@ -37,17 +67,13 @@ func InitWebsocketWithHub(app *fiber.App, wsManager *infra.WsManager) {
 
 	// WebSocket Endpoint (简化版，不依赖 Engine)
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
-		userID := c.Query("userID")
-		log.Println("New WS connection, userID:", userID)
+		log.Println("New WS connection")
 
 		// 1. Create Client Wrapper
 		client := infra.NewWsClient(c)
 
 		// 2. Register
-		wsManager.Register <- &infra.RegisterReq{
-			Client: client,
-			UserID: userID,
-		}
+		wsManager.Register <- client
 
 		// 3. Cleanup on exit
 		defer func() {
@@ -61,7 +87,7 @@ func InitWebsocketWithHub(app *fiber.App, wsManager *infra.WsManager) {
 		)
 		for {
 			if err = c.ReadJSON(&msg); err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				if shouldLogWsReadError(err) {
 					log.Println("ws read error:", err)
 				}
 				break
@@ -69,9 +95,9 @@ func InitWebsocketWithHub(app *fiber.App, wsManager *infra.WsManager) {
 
 			switch msg.Action {
 			case "subscribe":
-				wsManager.Subscribe(client, msg.InstrumentID)
+				_ = msg.InstrumentID
 			case "unsubscribe":
-				wsManager.Unsubscribe(client, msg.InstrumentID)
+				_ = msg.InstrumentID
 			default:
 				log.Println("Unexpected type:", msg.Action)
 			}
@@ -90,50 +116,21 @@ func InitWebsocketFull(app *fiber.App, deps WsHandlerDeps) {
 	})
 
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
-		userID := c.Query("userID")
-		log.Println("New WS connection, userID:", userID)
+		log.Println("New WS connection")
 
 		client := infra.NewWsClient(c)
 
-		deps.WsManager.Register <- &infra.RegisterReq{
-			Client: client,
-			UserID: userID,
-		}
-
-		localSubs := make(map[string]bool)
+		deps.WsManager.Register <- client
 
 		defer func() {
 			deps.WsManager.Unregister <- client
-			// 清理订阅
-			for instrumentID := range localSubs {
-				if err := deps.MarketSvc.Unsubscribe(context.Background(), instrumentID); err != nil {
-					log.Printf("WS Cleanup: Failed to unsubscribe %s: %v", instrumentID, err)
-				}
-			}
 		}()
-
-		// 自动订阅用户保存的合约
-		if userID != "" && deps.DB != nil {
-			go func() {
-				var subs []model.Subscription
-				if err := deps.DB.Where("user_id = ?", userID).Find(&subs).Error; err == nil {
-					for _, sub := range subs {
-						log.Printf("Auto-subscribing %s to %s", userID, sub.InstrumentID)
-						deps.WsManager.Subscribe(client, sub.InstrumentID)
-						localSubs[sub.InstrumentID] = true
-						if err := deps.MarketSvc.Subscribe(context.Background(), sub.InstrumentID); err != nil {
-							log.Printf("WS Auto-sub: Failed to subscribe %s: %v", sub.InstrumentID, err)
-						}
-					}
-				}
-			}()
-		}
 
 		// Read Loop
 		var msg WsRequest
 		for {
 			if err := c.ReadJSON(&msg); err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				if shouldLogWsReadError(err) {
 					log.Println("ws read error:", err)
 				}
 				break
@@ -141,21 +138,9 @@ func InitWebsocketFull(app *fiber.App, deps WsHandlerDeps) {
 
 			switch msg.Action {
 			case "subscribe":
-				deps.WsManager.Subscribe(client, msg.InstrumentID)
-				if !localSubs[msg.InstrumentID] {
-					localSubs[msg.InstrumentID] = true
-					if err := deps.MarketSvc.Subscribe(context.Background(), msg.InstrumentID); err != nil {
-						log.Printf("WS: Failed to subscribe %s: %v", msg.InstrumentID, err)
-					}
-				}
+				_ = msg.InstrumentID
 			case "unsubscribe":
-				deps.WsManager.Unsubscribe(client, msg.InstrumentID)
-				if localSubs[msg.InstrumentID] {
-					delete(localSubs, msg.InstrumentID)
-					if err := deps.MarketSvc.Unsubscribe(context.Background(), msg.InstrumentID); err != nil {
-						log.Printf("WS: Failed to unsubscribe %s: %v", msg.InstrumentID, err)
-					}
-				}
+				_ = msg.InstrumentID
 			default:
 				log.Println("Unexpected type:", msg.Action)
 			}

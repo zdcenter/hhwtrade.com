@@ -90,7 +90,6 @@ func (s *MarketServiceImpl) AddExistingSubscription(instrumentID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[instrumentID]++
-	s.subscriptions[instrumentID]++
 }
 
 // ResubscribeAll 重新订阅所有活跃合约
