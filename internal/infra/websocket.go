@@ -109,7 +109,7 @@ func (m *WsManager) Start() {
 			m.mu.Lock()
 			m.clients[client] = true
 			m.mu.Unlock()
-			log.Println("WS: New client registered")
+			log.Println("WS: New client registered, IP:", client.conn.RemoteAddr().String())
 
 		case client := <-m.Unregister:
 			m.mu.Lock()

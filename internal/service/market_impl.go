@@ -10,7 +10,7 @@ import (
 
 // MarketServiceImpl 实现 domain.MarketService 接口
 type MarketServiceImpl struct {
-	ctpClient domain.CTPClient
+	ctpClient domain.CTPClienter	
 	notifier  domain.Notifier
 
 	// 订阅引用计数
@@ -19,7 +19,7 @@ type MarketServiceImpl struct {
 }
 
 // NewMarketService 创建行情服务
-func NewMarketService(ctpClient domain.CTPClient, notifier domain.Notifier) *MarketServiceImpl {
+func NewMarketService(ctpClient domain.CTPClienter, notifier domain.Notifier) *MarketServiceImpl {
 	return &MarketServiceImpl{
 		ctpClient:     ctpClient,
 		notifier:      notifier,

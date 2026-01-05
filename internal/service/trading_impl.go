@@ -14,14 +14,14 @@ import (
 // TradingServiceImpl 实现 domain.TradingService 接口
 type TradingServiceImpl struct {
 	db        *gorm.DB
-	ctpClient domain.CTPClient
+	ctpClient domain.CTPClienter	
 	notifier  domain.Notifier
 }
 
 // NewTradingService 创建交易服务
 func NewTradingService(
 	db *gorm.DB,
-	ctpClient domain.CTPClient,
+	ctpClient domain.CTPClienter,
 	notifier domain.Notifier,
 ) *TradingServiceImpl {
 	return &TradingServiceImpl{

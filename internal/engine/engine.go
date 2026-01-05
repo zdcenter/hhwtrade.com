@@ -25,7 +25,7 @@ type Engine struct {
 	// 基础设施
 	rdb          *redis.Client
 	websocketHub *infra.WsManager
-	ctpHandler   *ctp.Handler
+	ctpHandler   *ctp.CTPHandler
 
 	// 业务服务 (依赖接口)
 	marketService   *service.MarketServiceImpl
@@ -41,7 +41,7 @@ func NewEngine(
 	cfg *config.Config,
 	rdb *redis.Client,
 	websocketHub *infra.WsManager,
-	ctpHandler *ctp.Handler,
+	ctpHandler *ctp.CTPHandler,
 	marketService *service.MarketServiceImpl,
 	strategyService *service.StrategyServiceImpl,
 ) *Engine {

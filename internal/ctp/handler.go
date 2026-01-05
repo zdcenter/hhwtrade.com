@@ -10,29 +10,29 @@ import (
 	"hhwtrade.com/internal/model"
 )
 
-// Handler processes incoming CTP responses using the database and notifier.
-type Handler struct {
+// CTPHandler processes incoming CTP responses using the database and notifier.
+type CTPHandler struct {
 	db       *gorm.DB
 	notifier domain.Notifier
 }
 
-// NewHandler creates a new CTP Response Handler.
-func NewHandler(db *gorm.DB, notifier domain.Notifier) *Handler {
-	return &Handler{
+// NewCTPHandler creates a new CTP Response Handler.
+func NewCTPHandler(db *gorm.DB, notifier domain.Notifier) *CTPHandler {
+	return &CTPHandler{
 		db:       db,
 		notifier: notifier,
 	}
 }
 
 // ProcessResponse dispatches the response based on its type.
-func (h *Handler) ProcessResponse(resp TradeResponse) {
+func (h *CTPHandler) ProcessResponse(resp TradeResponse) {
 	log.Printf("CTP Handler: Processing %s, ReqID=%s", resp.Type, resp.RequestID)
 
 	payload, ok := resp.Payload.(map[string]interface{})
 	if !ok {
-		// Some responses like QRY_POS_RSP might have nested structures that decode differently 
+		// Some responses like QRY_POS_RSP might have nested structures that decode differently
 		// if we aren't careful, but based on current engine logic, Payload is usually a map.
-		// However, for QRY_POS_RSP/QRY_INSTRUMENT_RSP, if they come as raw json in Payload, 
+		// However, for QRY_POS_RSP/QRY_INSTRUMENT_RSP, if they come as raw json in Payload,
 		// we might need to be careful. The original code assumed Payload is map[string]interface{}.
 		// Let's stick to the original logic which checks type assertions.
 		log.Printf("CTP Handler: Invalid payload format for %s", resp.Type)
@@ -56,7 +56,7 @@ func (h *Handler) ProcessResponse(resp TradeResponse) {
 	}
 }
 
-func (h *Handler) handleRtnOrder(resp TradeResponse, payload map[string]interface{}) {
+func (h *CTPHandler) handleRtnOrder(resp TradeResponse, payload map[string]interface{}) {
 	statusStr, _ := payload["OrderStatus"].(string)
 	orderSysID, _ := payload["OrderSysID"].(string)
 	errorMsg, _ := payload["StatusMsg"].(string)
@@ -90,7 +90,7 @@ func (h *Handler) handleRtnOrder(resp TradeResponse, payload map[string]interfac
 	}
 }
 
-func (h *Handler) handleRtnTrade(resp TradeResponse, payload map[string]interface{}) {
+func (h *CTPHandler) handleRtnTrade(resp TradeResponse, payload map[string]interface{}) {
 	var order model.Order
 	if h.db.Where("order_ref = ?", resp.RequestID).First(&order).Error == nil {
 		tradeVol, _ := payload["Volume"].(float64)
@@ -135,7 +135,7 @@ func (h *Handler) handleRtnTrade(resp TradeResponse, payload map[string]interfac
 	}
 }
 
-func (h *Handler) handleErrOrder(resp TradeResponse, payload map[string]interface{}) {
+func (h *CTPHandler) handleErrOrder(resp TradeResponse, payload map[string]interface{}) {
 	errorMsg, _ := payload["ErrorMsg"].(string)
 
 	var order model.Order
@@ -156,7 +156,7 @@ func (h *Handler) handleErrOrder(resp TradeResponse, payload map[string]interfac
 	}
 }
 
-func (h *Handler) handleQryPosRsp(payload map[string]interface{}) {
+func (h *CTPHandler) handleQryPosRsp(payload map[string]interface{}) {
 	if positions, ok := payload["Positions"].([]interface{}); ok {
 		for _, p := range positions {
 			pBytes, _ := json.Marshal(p)
@@ -169,7 +169,7 @@ func (h *Handler) handleQryPosRsp(payload map[string]interface{}) {
 	}
 }
 
-func (h *Handler) handleQryInstrumentRsp(payload map[string]interface{}) {
+func (h *CTPHandler) handleQryInstrumentRsp(payload map[string]interface{}) {
 	if instruments, ok := payload["Instruments"].([]interface{}); ok {
 		for _, inst := range instruments {
 			instBytes, _ := json.Marshal(inst)
@@ -182,7 +182,7 @@ func (h *Handler) handleQryInstrumentRsp(payload map[string]interface{}) {
 	}
 }
 
-func (h *Handler) updatePosition(order model.Order, tradePayload map[string]interface{}) {
+func (h *CTPHandler) updatePosition(order model.Order, tradePayload map[string]interface{}) {
 	// Determine PosiDirection: '2' Long, '3' Short
 	posiDir := "2" // Default to Long
 	if order.Direction == model.DirectionBuy {
@@ -212,7 +212,7 @@ func (h *Handler) updatePosition(order model.Order, tradePayload map[string]inte
 				TodayPosition: int(tradeVol),
 				AveragePrice:  tradePrice,
 				PositionCost:  tradePrice * tradeVol,
-				UpdatedAt:    time.Now(),
+				UpdatedAt:     time.Now(),
 			}
 			h.db.Create(&pos)
 		}
@@ -222,7 +222,7 @@ func (h *Handler) updatePosition(order model.Order, tradePayload map[string]inte
 			newTotal := pos.Position + int(tradeVol)
 			pos.PositionCost += tradePrice * tradeVol
 			if newTotal > 0 {
-				pos.AveragePrice = pos.PositionCost / float64(newTotal)	
+				pos.AveragePrice = pos.PositionCost / float64(newTotal)
 			}
 			pos.Position = newTotal
 			pos.TodayPosition += int(tradeVol)
@@ -236,15 +236,20 @@ func (h *Handler) updatePosition(order model.Order, tradePayload map[string]inte
 			} else {
 				pos.YdPosition -= int(tradeVol)
 			}
-			if pos.TodayPosition < 0 { pos.TodayPosition = 0 }
-			if pos.YdPosition < 0 { pos.YdPosition = 0 }
+			if pos.TodayPosition < 0 {
+				pos.TodayPosition = 0
+			}
+			if pos.YdPosition < 0 {
+				pos.YdPosition = 0
+			}
 		}
 		pos.UpdatedAt = time.Now()
 		h.db.Save(&pos)
 	}
 }
 
-func (h *Handler) notifyUser(userID string, data interface{}) {
+// notifyUser 发送通知给用户
+func (h *CTPHandler) notifyUser(userID string, data interface{}) {
 	if h.notifier != nil {
 		_ = userID
 		h.notifier.BroadcastToAll(data)

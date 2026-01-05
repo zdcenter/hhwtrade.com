@@ -46,7 +46,7 @@ func main() {
 	ctpClient := ctp.NewClient(rdb)
 
 	// 3.2 CTP Handler (处理回报)
-	ctpHandler := ctp.NewHandler(pg.DB, wsHub)
+	ctpHandler := ctp.NewCTPHandler(pg.DB, wsHub)
 
 	// ============================================
 	// 4. 初始化服务层

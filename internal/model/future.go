@@ -1,8 +1,6 @@
 package model
 
-
-
-// Future represents a tradable contract in the system.
+// Future 表示系统中的可交易合约
 type Future struct {
 	InstrumentID         string  `gorm:"primaryKey" json:"InstrumentID"`
 	ExchangeID           string  `json:"ExchangeID"`
@@ -19,5 +17,3 @@ type Future struct {
 	IsActive             bool    `gorm:"default:true" json:"IsActive"`
 	MarginRate           float64 `json:"MarginRate"`
 }
-
-

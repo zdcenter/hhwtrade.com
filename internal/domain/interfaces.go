@@ -107,7 +107,7 @@ type Notifier interface {
 // ===========================
 
 // CTPClient 定义与 CTP 网关通信的接口
-type CTPClient interface {
+type CTPClienter interface {
 	// 订阅行情
 	Subscribe(ctx context.Context, instrumentID string) error
 	// 取消订阅
