@@ -146,29 +146,17 @@ func (s *SubscriptionServiceImpl) RestoreSubscriptions(ctx context.Context) erro
 		return nil
 	}
 
-	log.Printf("SubscriptionService: Restoring %d distinct subscriptions...", len(instrumentIDs))
+	log.Printf("SubscriptionService: Restoring %d subscriptions...", len(instrumentIDs))
 
-	// 2. 统计每个合约的订阅数 (为了准确恢复 MarketService 的引用计数)
-	type Result struct {
-		InstrumentID string
-		Count        int
-	}
-	var results []Result
-	if err := s.db.Model(&model.Subscription{}).Select("instrument_id, count(*) as count").Group("instrument_id").Scan(&results).Error; err != nil {
-		return domain.NewInternalError("failed to count subscriptions", err)
-	}
-
-	// 3. 恢复 MarketService 状态
+	// 2. 恢复 MarketService 状态
 	if s.marketService != nil {
-		for _, res := range results {
-			log.Printf("SubscriptionService: Restoring %s (count: %d)", res.InstrumentID, res.Count)
-			// 恢复引用计数
-			for i := 0; i < res.Count; i++ {
-				s.marketService.AddExistingSubscription(res.InstrumentID)
-			}
-			// 触发 CTP 订阅 (MarketService 内部会判断去重)
-			if err := s.marketService.Subscribe(ctx, res.InstrumentID); err != nil {
-				log.Printf("SubscriptionService: Failed to restore CTP subscription for %s: %v", res.InstrumentID, err)
+		for _, id := range instrumentIDs {
+			log.Printf("SubscriptionService: Restoring %s", id)
+			// 直接进入 Subscribe。
+			// 因为是启动阶段，s.marketService.subscriptions 应该是空的。
+			// 第一个 Subscribe(id) 会触发 isFirst=true，从而发送 Redis 命令给 ctp_main。
+			if err := s.marketService.Subscribe(ctx, id); err != nil {
+				log.Printf("SubscriptionService: Failed to restore CTP subscription for %s: %v", id, err)
 			}
 		}
 	}

@@ -33,7 +33,17 @@ type OrderRequest struct {
 }
 
 // InsertOrder 下单
-// POST /api/trade/order
+// @Summary 下单请求
+// @Description 发送交易报单请求
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param body body OrderRequest true "报单信息"
+// @Success 202 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /trade/order [post]
 func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 	var req OrderRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -69,7 +79,16 @@ func (h *TradeHandler) InsertOrder(c *fiber.Ctx) error {
 }
 
 // GetPositions 获取持仓列表
-// GET /api/users/:userID/positions
+// @Summary 获取持仓列表
+// @Description 获取指定用户的当前持仓信息
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param userID path string true "用户ID"
+// @Success 200 {array} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /users/{userID}/positions [get]
 func (h *TradeHandler) GetPositions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 
@@ -82,7 +101,18 @@ func (h *TradeHandler) GetPositions(c *fiber.Ctx) error {
 }
 
 // GetOrders 获取订单列表
-// GET /api/users/:userID/orders
+// @Summary 获取订单列表
+// @Description 分页获取用户的订单（委托）记录
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param userID path string true "用户ID"
+// @Param page query int false "页码" default(1)
+// @Param pageSize query int false "每页数量" default(50)
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /users/{userID}/orders [get]
 func (h *TradeHandler) GetOrders(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -104,7 +134,17 @@ func (h *TradeHandler) GetOrders(c *fiber.Ctx) error {
 }
 
 // SyncPositions 同步持仓
-// POST /api/users/:userID/sync-positions
+// @Summary 同步持仓
+// @Description 触发一次持仓查询请求，从CTP同步最新持仓
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param userID path string true "用户ID"
+// @Param symbol query string false "合约代码(可选)"
+// @Success 202 {string} string "Accepted"
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /users/{userID}/sync-positions [post]
 func (h *TradeHandler) SyncPositions(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 	symbol := c.Query("symbol")
@@ -117,7 +157,16 @@ func (h *TradeHandler) SyncPositions(c *fiber.Ctx) error {
 }
 
 // SyncAccount 同步账户
-// POST /api/users/:userID/sync-account
+// @Summary 同步账户资金
+// @Description 触发一次账户资金查询请求，从CTP同步最新资金信息
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param userID path string true "用户ID"
+// @Success 202 {string} string "Accepted"
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /users/{userID}/sync-account [post]
 func (h *TradeHandler) SyncAccount(c *fiber.Ctx) error {
 	userID := c.Params("userID")
 
@@ -129,7 +178,16 @@ func (h *TradeHandler) SyncAccount(c *fiber.Ctx) error {
 }
 
 // CancelOrder 撤单
-// POST /api/trade/order/:id/cancel
+// @Summary 撤单
+// @Description 取消尚未完全成交的订单
+// @Tags Trade
+// @Accept json
+// @Produce json
+// @Param id path int true "订单内部ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /trade/order/{id}/cancel [post]
 func (h *TradeHandler) CancelOrder(c *fiber.Ctx) error {
 	id, _ := strconv.ParseUint(c.Params("id"), 10, 32)
 

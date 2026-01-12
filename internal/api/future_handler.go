@@ -25,7 +25,19 @@ func NewFutureHandler(db *gorm.DB, marketSvc domain.MarketService) *FutureHandle
 }
 
 // GetFutures 获取期货合约列表
-// GET /api/futures
+// @Summary 获取期货合约列表
+// @Description 分页获取期货列表，支持按InstrumentID(前缀)和ExchangeID过滤
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param page query int false "页码" default(1)
+// @Param pageSize query int false "每页数量" default(50)
+// @Param InstrumentID query string false "按合约代码前缀筛选"
+// @Param ExchangeID query string false "按交易所代码筛选"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures [get]
 func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("pageSize", "50"))
@@ -65,7 +77,16 @@ func (h *FutureHandler) GetFutures(c *fiber.Ctx) error {
 }
 
 // GetFuture 获取单个合约
-// GET /api/futures/:id
+// @Summary 获取单个合约详情
+// @Description 根据合约ID获取单个期货合约的详细信息
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param id path string true "合约ID (InstrumentID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/{id} [get]
 func (h *FutureHandler) GetFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var instrument model.Future
@@ -78,7 +99,19 @@ func (h *FutureHandler) GetFuture(c *fiber.Ctx) error {
 }
 
 // UpdateFuture 更新合约
-// PUT /api/futures/:id
+// @Summary 更新合约信息
+// @Description 更新指定ID的期货合约信息
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param id path string true "合约ID"
+// @Param body body model.Future true "合约信息"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/{id} [put]
 func (h *FutureHandler) UpdateFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
 
@@ -99,7 +132,16 @@ func (h *FutureHandler) UpdateFuture(c *fiber.Ctx) error {
 }
 
 // DeleteFuture 删除合约
-// DELETE /api/futures/:id
+// @Summary 删除合约
+// @Description 删除指定ID的期货合约
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param id path string true "合约ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/{id} [delete]
 func (h *FutureHandler) DeleteFuture(c *fiber.Ctx) error {
 	id := c.Params("id")
 
@@ -111,7 +153,16 @@ func (h *FutureHandler) DeleteFuture(c *fiber.Ctx) error {
 }
 
 // SearchInstruments 搜索合约
-// GET /api/futures/search?q=rb
+// @Summary 搜索合约
+// @Description 根据关键字模糊搜索合约（匹配ID、产品ID或名称）
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param q query string true "搜索关键字"
+// @Success 200 {array} model.Future
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/search [get]
 func (h *FutureHandler) SearchInstruments(c *fiber.Ctx) error {
 	query := c.Query("q")
 	if query == "" {
@@ -133,7 +184,15 @@ func (h *FutureHandler) SearchInstruments(c *fiber.Ctx) error {
 }
 
 // SyncInstruments 同步合约
-// POST /api/futures/sync
+// @Summary 同步合约数据
+// @Description 触发后台任务，从 CTP 或其他源同步最新的合约列表
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/sync [post]
 func (h *FutureHandler) SyncInstruments(c *fiber.Ctx) error {
 	if err := h.marketSvc.SyncInstruments(c.Context()); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger instrument sync"})
@@ -142,7 +201,15 @@ func (h *FutureHandler) SyncInstruments(c *fiber.Ctx) error {
 }
 
 // CleanupExpired 清理过期合约
-// POST /api/futures/cleanup
+// @Summary 清理过期合约
+// @Description 删除数据库中所有过期日期早于今天的合约记录
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/cleanup [post]
 func (h *FutureHandler) CleanupExpired(c *fiber.Ctx) error {
 	now := time.Now().Format("20060102")
 

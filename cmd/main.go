@@ -13,6 +13,18 @@ import (
 	"hhwtrade.com/internal/strategies"
 )
 
+// @title HHWTrade Fiber API
+// @version 1.0
+// @description High-performance CTP trading API
+// @contact.name API Support
+// @contact.email support@hhwtrade.com
+// @license.name Apache 2.0
+// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+// @host localhost:3000
+// @BasePath /api
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
 func main() {
 	// ============================================
 	// 1. 加载配置

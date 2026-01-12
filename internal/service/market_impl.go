@@ -10,7 +10,7 @@ import (
 
 // MarketServiceImpl 实现 domain.MarketService 接口
 type MarketServiceImpl struct {
-	ctpClient domain.CTPClienter	
+	ctpClient domain.CTPClienter
 	notifier  domain.Notifier
 
 	// 订阅引用计数
@@ -83,13 +83,6 @@ func (s *MarketServiceImpl) GetActiveSymbols() []string {
 func (s *MarketServiceImpl) SyncInstruments(ctx context.Context) error {
 	log.Println("MarketService: Triggering instrument sync from CTP")
 	return s.ctpClient.SyncInstruments(ctx)
-}
-
-// AddExistingSubscription 添加已存在的订阅（用于启动时恢复）
-func (s *MarketServiceImpl) AddExistingSubscription(instrumentID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.subscriptions[instrumentID]++
 }
 
 // ResubscribeAll 重新订阅所有活跃合约

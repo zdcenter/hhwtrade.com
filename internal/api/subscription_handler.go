@@ -19,7 +19,17 @@ func NewSubscriptionHandler(subscriptionSvc domain.SubscriptionService) *Subscri
 }
 
 // GetSubscriptions 获取订阅列表
-// GET /api/subscriptions?page=1&pageSize=10
+// @Summary 获取订阅列表
+// @Description 分页获取当前系统的所有行情订阅信息
+// @Tags Subscriptions
+// @Accept json
+// @Produce json
+// @Param page query int false "页码" default(1)
+// @Param pageSize query int false "每页数量" default(10)
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /subscriptions [get]
 func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("pageSize", "10"))
@@ -39,13 +49,26 @@ func (h *SubscriptionHandler) GetSubscriptions(c *fiber.Ctx) error {
 	return SendPaginatedResponse(c, subs, page, pageSize, total)
 }
 
+// AddSubscriptionRequest 添加订阅请求参数
+type AddSubscriptionRequest struct {
+	InstrumentID string `json:"InstrumentID"`
+	ExchangeID   string `json:"ExchangeID"`
+}
+
 // AddSubscription 添加订阅
-// POST /api/subscriptions
+// @Summary 添加订阅
+// @Description 添加一个新的行情订阅请求
+// @Tags Subscriptions
+// @Accept json
+// @Produce json
+// @Param body body AddSubscriptionRequest true "订阅信息"
+// @Success 201 {object} model.Subscription
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /subscriptions [post]
 func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
-	var req struct {
-		InstrumentID string `json:"InstrumentID"`
-		ExchangeID   string `json:"ExchangeID"`
-	}
+	var req AddSubscriptionRequest
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})
@@ -60,7 +83,16 @@ func (h *SubscriptionHandler) AddSubscription(c *fiber.Ctx) error {
 }
 
 // RemoveSubscription 移除订阅
-// DELETE /api/subscriptions/:symbol
+// @Summary 移除订阅
+// @Description 根据合约ID移除行情订阅
+// @Tags Subscriptions
+// @Accept json
+// @Produce json
+// @Param symbol path string true "合约代码 (InstrumentID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /subscriptions/{symbol} [delete]
 func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	instrumentID := c.Params("symbol")
 
@@ -76,12 +108,25 @@ func (h *SubscriptionHandler) RemoveSubscription(c *fiber.Ctx) error {
 	})
 }
 
+// ReorderSubscriptionsRequest 排序订阅请求参数
+type ReorderSubscriptionsRequest struct {
+	InstrumentIDs []string `json:"InstrumentIDs"`
+}
+
 // ReorderSubscriptions 重新排序订阅
-// PUT /api/subscriptions/reorder
+// @Summary 重新排序订阅
+// @Description 批量更新订阅列表的顺序，主要用于前端展示
+// @Tags Subscriptions
+// @Accept json
+// @Produce json
+// @Param body body ReorderSubscriptionsRequest true "排序后的合约ID列表"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /subscriptions/reorder [put]
 func (h *SubscriptionHandler) ReorderSubscriptions(c *fiber.Ctx) error {
-	var req struct {
-		InstrumentIDs []string `json:"InstrumentIDs"`
-	}
+	var req ReorderSubscriptionsRequest
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"Error": "Invalid request body"})

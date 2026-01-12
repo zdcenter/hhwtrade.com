@@ -38,8 +38,6 @@ type MarketService interface {
 	GetActiveSymbols() []string
 	// 同步合约信息
 	SyncInstruments(ctx context.Context) error
-	// 添加已存在的订阅 (用于恢复)
-	AddExistingSubscription(instrumentID string)
 	// 重新订阅所有活跃合约 (用于 CTP 重启恢复)
 	ResubscribeAll(ctx context.Context) error
 }

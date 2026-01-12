@@ -69,7 +69,6 @@ func (e *Engine) Start() {
 	// 2. 为活跃策略订阅行情
 	for _, symbol := range e.strategyService.GetActiveSymbols() {
 		log.Printf("Engine: Subscribing to %s for active strategies", symbol)
-		e.marketService.AddExistingSubscription(symbol)
 		if err := e.marketService.Subscribe(e.ctx, symbol); err != nil {
 			log.Printf("Engine: Failed to subscribe to %s: %v", symbol, err)
 		}

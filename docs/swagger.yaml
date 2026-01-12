@@ -1,0 +1,675 @@
+basePath: /api
+definitions:
+  api.AddSubscriptionRequest:
+    properties:
+      ExchangeID:
+        type: string
+      InstrumentID:
+        type: string
+    type: object
+  api.OrderRequest:
+    properties:
+      CombOffsetFlag:
+        $ref: '#/definitions/model.OrderOffset'
+      Direction:
+        $ref: '#/definitions/model.OrderDirection'
+      InstrumentID:
+        type: string
+      LimitPrice:
+        type: number
+      StrategyID:
+        type: integer
+      UserID:
+        type: string
+      VolumeTotalOriginal:
+        type: integer
+    type: object
+  api.ReorderSubscriptionsRequest:
+    properties:
+      InstrumentIDs:
+        items:
+          type: string
+        type: array
+    type: object
+  model.Future:
+    properties:
+      ExchangeID:
+        type: string
+      ExpireDate:
+        type: string
+      InstrumentID:
+        type: string
+      InstrumentName:
+        type: string
+      IsActive:
+        type: boolean
+      IsTrading:
+        type: integer
+      MarginRate:
+        type: number
+      MaxLimitOrderVolume:
+        type: integer
+      MaxMarketOrderVolume:
+        type: integer
+      MinLimitOrderVolume:
+        type: integer
+      MinMarketOrderVolume:
+        type: integer
+      PriceTick:
+        type: number
+      ProductID:
+        type: string
+      VolumeMultiple:
+        type: integer
+    type: object
+  model.OrderDirection:
+    enum:
+    - "0"
+    - "1"
+    type: string
+    x-enum-comments:
+      DirectionBuy: 买
+      DirectionSell: 卖
+    x-enum-descriptions:
+    - 买
+    - 卖
+    x-enum-varnames:
+    - DirectionBuy
+    - DirectionSell
+  model.OrderOffset:
+    enum:
+    - "0"
+    - "1"
+    - "3"
+    - "4"
+    type: string
+    x-enum-comments:
+      OffsetClose: 平仓
+      OffsetCloseToday: 平今
+      OffsetCloseYesterday: 平昨
+      OffsetOpen: 开仓
+    x-enum-descriptions:
+    - 开仓
+    - 平仓
+    - 平今
+    - 平昨
+    x-enum-varnames:
+    - OffsetOpen
+    - OffsetClose
+    - OffsetCloseToday
+    - OffsetCloseYesterday
+  model.Subscription:
+    properties:
+      CreatedAt:
+        type: string
+      ExchangeID:
+        type: string
+      ID:
+        type: integer
+      InstrumentID:
+        type: string
+      Sorter:
+        type: integer
+    type: object
+host: localhost:3000
+info:
+  contact:
+    email: support@hhwtrade.com
+    name: API Support
+  description: High-performance CTP trading API
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  title: HHWTrade Fiber API
+  version: "1.0"
+paths:
+  /futures:
+    get:
+      consumes:
+      - application/json
+      description: 分页获取期货列表，支持按InstrumentID(前缀)和ExchangeID过滤
+      parameters:
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 50
+        description: 每页数量
+        in: query
+        name: pageSize
+        type: integer
+      - description: 按合约代码前缀筛选
+        in: query
+        name: InstrumentID
+        type: string
+      - description: 按交易所代码筛选
+        in: query
+        name: ExchangeID
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取期货合约列表
+      tags:
+      - Market
+  /futures/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定ID的期货合约
+      parameters:
+      - description: 合约ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 删除合约
+      tags:
+      - Market
+    get:
+      consumes:
+      - application/json
+      description: 根据合约ID获取单个期货合约的详细信息
+      parameters:
+      - description: 合约ID (InstrumentID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取单个合约详情
+      tags:
+      - Market
+    put:
+      consumes:
+      - application/json
+      description: 更新指定ID的期货合约信息
+      parameters:
+      - description: 合约ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 合约信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.Future'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 更新合约信息
+      tags:
+      - Market
+  /futures/cleanup:
+    post:
+      consumes:
+      - application/json
+      description: 删除数据库中所有过期日期早于今天的合约记录
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 清理过期合约
+      tags:
+      - Market
+  /futures/search:
+    get:
+      consumes:
+      - application/json
+      description: 根据关键字模糊搜索合约（匹配ID、产品ID或名称）
+      parameters:
+      - description: 搜索关键字
+        in: query
+        name: q
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Future'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 搜索合约
+      tags:
+      - Market
+  /futures/sync:
+    post:
+      consumes:
+      - application/json
+      description: 触发后台任务，从 CTP 或其他源同步最新的合约列表
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 同步合约数据
+      tags:
+      - Market
+  /subscriptions:
+    get:
+      consumes:
+      - application/json
+      description: 分页获取当前系统的所有行情订阅信息
+      parameters:
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 10
+        description: 每页数量
+        in: query
+        name: pageSize
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取订阅列表
+      tags:
+      - Subscriptions
+    post:
+      consumes:
+      - application/json
+      description: 添加一个新的行情订阅请求
+      parameters:
+      - description: 订阅信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.AddSubscriptionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Subscription'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 添加订阅
+      tags:
+      - Subscriptions
+  /subscriptions/{symbol}:
+    delete:
+      consumes:
+      - application/json
+      description: 根据合约ID移除行情订阅
+      parameters:
+      - description: 合约代码 (InstrumentID)
+        in: path
+        name: symbol
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 移除订阅
+      tags:
+      - Subscriptions
+  /subscriptions/reorder:
+    put:
+      consumes:
+      - application/json
+      description: 批量更新订阅列表的顺序，主要用于前端展示
+      parameters:
+      - description: 排序后的合约ID列表
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.ReorderSubscriptionsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 重新排序订阅
+      tags:
+      - Subscriptions
+  /trade/order:
+    post:
+      consumes:
+      - application/json
+      description: 发送交易报单请求
+      parameters:
+      - description: 报单信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.OrderRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 下单请求
+      tags:
+      - Trade
+  /trade/order/{id}/cancel:
+    post:
+      consumes:
+      - application/json
+      description: 取消尚未完全成交的订单
+      parameters:
+      - description: 订单内部ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 撤单
+      tags:
+      - Trade
+  /users/{userID}/orders:
+    get:
+      consumes:
+      - application/json
+      description: 分页获取用户的订单（委托）记录
+      parameters:
+      - description: 用户ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 50
+        description: 每页数量
+        in: query
+        name: pageSize
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取订单列表
+      tags:
+      - Trade
+  /users/{userID}/positions:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定用户的当前持仓信息
+      parameters:
+      - description: 用户ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取持仓列表
+      tags:
+      - Trade
+  /users/{userID}/sync-account:
+    post:
+      consumes:
+      - application/json
+      description: 触发一次账户资金查询请求，从CTP同步最新资金信息
+      parameters:
+      - description: 用户ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 同步账户资金
+      tags:
+      - Trade
+  /users/{userID}/sync-positions:
+    post:
+      consumes:
+      - application/json
+      description: 触发一次持仓查询请求，从CTP同步最新持仓
+      parameters:
+      - description: 用户ID
+        in: path
+        name: userID
+        required: true
+        type: string
+      - description: 合约代码(可选)
+        in: query
+        name: symbol
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 同步持仓
+      tags:
+      - Trade
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

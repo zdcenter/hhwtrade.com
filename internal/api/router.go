@@ -4,7 +4,9 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/swagger"
 	"gorm.io/gorm"
+	_ "hhwtrade.com/docs"
 	"hhwtrade.com/internal/api/middleware"
 	"hhwtrade.com/internal/auth"
 	"hhwtrade.com/internal/config"
@@ -78,6 +80,9 @@ func (r *Router) RegisterRoutes() {
 			"message": "Service is healthy",
 		})
 	})
+
+	// Swagger Documentation
+	r.app.Get("/swagger/*", swagger.HandlerDefault) 
 
 	// Auth Public Routes
 	r.app.Post("/auth/register", authHandler.Register)
