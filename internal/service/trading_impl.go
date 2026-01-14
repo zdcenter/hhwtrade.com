@@ -14,7 +14,7 @@ import (
 // TradingServiceImpl 实现 domain.TradingService 接口
 type TradingServiceImpl struct {
 	db        *gorm.DB
-	ctpClient domain.CTPClienter	
+	ctpClient domain.CTPClienter
 	notifier  domain.Notifier
 }
 
@@ -41,7 +41,15 @@ func (s *TradingServiceImpl) PlaceOrder(ctx context.Context, order *model.Order)
 		order.OrderRef = fmt.Sprintf("%06d%06d", timestampPart, microPart)
 	}
 
-	// 2. 设置初始状态
+	// 2. 补全交易所信息 (如果缺失)
+	if order.ExchangeID == "" {
+		var future model.Future
+		if err := s.db.Where("instrument_id = ?", order.InstrumentID).First(&future).Error; err == nil {
+			order.ExchangeID = future.ExchangeID
+		}
+	}
+
+	// 3. 设置初始状态
 	order.OrderStatus = model.OrderStatusSent
 
 	// 3. 发送到 CTP (低延迟优先)
@@ -87,26 +95,25 @@ func (s *TradingServiceImpl) CancelOrder(ctx context.Context, orderID uint) erro
 	return nil
 }
 
-// QueryPositions 查询持仓
-func (s *TradingServiceImpl) QueryPositions(ctx context.Context, userID, instrumentID string) error {
-	log.Printf("TradingService: Querying positions for user %s, instrument %s", userID, instrumentID)
-	return s.ctpClient.QueryPositions(ctx, userID, instrumentID)
+// QueryPositions 查询持仓 (触发 CTP 查询)
+func (s *TradingServiceImpl) QueryPositions(ctx context.Context, investorID, instrumentID string) error {
+	log.Printf("TradingService: Querying positions for investor %s, instrument %s", investorID, instrumentID)
+	return s.ctpClient.QueryPositions(ctx, investorID, instrumentID)
 }
 
 // QueryAccount 查询账户
-func (s *TradingServiceImpl) QueryAccount(ctx context.Context, userID string) error {
-	log.Printf("TradingService: Querying account for user %s", userID)
-	return s.ctpClient.QueryAccount(ctx, userID)
+func (s *TradingServiceImpl) QueryAccount(ctx context.Context, investorID string) error {
+	log.Printf("TradingService: Querying account for investor %s", investorID)
+	return s.ctpClient.QueryAccount(ctx, investorID)
 }
 
 // GetOrders 获取订单列表
-func (s *TradingServiceImpl) GetOrders(ctx context.Context, userID string, page, pageSize int) ([]model.Order, int64, error) {
+func (s *TradingServiceImpl) GetOrders(ctx context.Context, investorID string, page, pageSize int) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
 
 	offset := (page - 1) * pageSize
-
-	query := s.db.Model(&model.Order{}).Where("user_id = ?", userID)
+	query := s.db.Model(&model.Order{}).Where("investor_id = ?", investorID)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, domain.NewInternalError("failed to count orders", err)
@@ -122,10 +129,32 @@ func (s *TradingServiceImpl) GetOrders(ctx context.Context, userID string, page,
 	return orders, total, nil
 }
 
+// GetTrades 获取成交列表
+func (s *TradingServiceImpl) GetTrades(ctx context.Context, investorID string, page, pageSize int) ([]model.Trade, int64, error) {
+	var trades []model.Trade
+	var total int64
+
+	offset := (page - 1) * pageSize
+	query := s.db.Model(&model.Trade{}).Where("exchange_id != ''").Where("investor_id = ?", investorID) // 基于 InvestorID 过滤
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, domain.NewInternalError("failed to count trades", err)
+	}
+
+	if err := query.Order("created_at DESC").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&trades).Error; err != nil {
+		return nil, 0, domain.NewInternalError("failed to fetch trades", err)
+	}
+
+	return trades, total, nil
+}
+
 // GetPositions 获取持仓列表
-func (s *TradingServiceImpl) GetPositions(ctx context.Context, userID string) ([]model.Position, error) {
+func (s *TradingServiceImpl) GetPositions(ctx context.Context, investorID string) ([]model.Position, error) {
 	var positions []model.Position
-	if err := s.db.Where("user_id = ?", userID).Find(&positions).Error; err != nil {
+	if err := s.db.Where("investor_id = ?", investorID).Find(&positions).Error; err != nil {
 		return nil, domain.NewInternalError("failed to fetch positions", err)
 	}
 	return positions, nil

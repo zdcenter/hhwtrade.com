@@ -57,11 +57,11 @@ func (c *Client) Unsubscribe(ctx context.Context, instrumentID string) error {
 }
 
 // QueryPositions requests all positions for a user and instrument.
-func (c *Client) QueryPositions(ctx context.Context, userID string, instrumentID string) error {
+func (c *Client) QueryPositions(ctx context.Context, investorID string, instrumentID string) error {
 	cmd := Command{
 		Type: "QUERY_POSITIONS",
 		Payload: map[string]interface{}{
-			"InvestorID":   userID,
+			"InvestorID":   investorID,
 			"InstrumentID": instrumentID,
 		},
 		RequestID: fmt.Sprintf("query-pos-%s", time.Now().Format("20060102150405")),
@@ -70,11 +70,11 @@ func (c *Client) QueryPositions(ctx context.Context, userID string, instrumentID
 }
 
 // QueryAccount requests trading account info.
-func (c *Client) QueryAccount(ctx context.Context, userID string) error {
+func (c *Client) QueryAccount(ctx context.Context, investorID string) error {
 	cmd := Command{
 		Type: "QUERY_ACCOUNT",
 		Payload: map[string]interface{}{
-			"InvestorID": userID,
+			"InvestorID": investorID,
 		},
 		RequestID: fmt.Sprintf("query-acc-%s", time.Now().Format("20060102150405")),
 	}
@@ -97,24 +97,19 @@ func (c *Client) InsertOrder(ctx context.Context, order *model.Order) error {
 	// Construct the payload for CTP
 	// Note: We are passing the raw characters '0','1' etc directly as they are stored in model
 	payload := map[string]interface{}{
-		"InstrumentID": order.InstrumentID,
-		"ExchangeID":   order.ExchangeID,
-		"OrderRef":     order.OrderRef,
-		"Direction":    string(order.Direction),
-		"OffsetFlag":   string(order.CombOffsetFlag),
-		"Price":        order.LimitPrice,
-		"Volume":       order.VolumeTotalOriginal,
-		"OrderPriceType": "LimitPrice", // Defaulting to LimitPrice for now
-		"TimeCondition": "GFD",        // Default
-		"UserID":       order.UserID,
-		"InvestorID":   order.InvestorID,
-	// Add StrategyID to payload if needed by CTP? No, CTP doesn't know StrategyID, 
-	// but we map it back via OrderRef in the database.
-	}
-	
-	// If it's a generated order, ensure these IDs are set
-	if order.InvestorID == "" {
-		payload["InvestorID"] = order.UserID // Fallback
+		"InstrumentID":   order.InstrumentID,
+		"ExchangeID":     order.ExchangeID,
+		"OrderRef":       order.OrderRef,
+		"Direction":      string(order.Direction),
+		"OffsetFlag":     string(order.CombOffsetFlag),
+		"Price":          order.LimitPrice,
+		"Volume":         order.VolumeTotalOriginal,
+		"OrderPriceType": "LimitPrice",     // Defaulting to LimitPrice for now
+		"TimeCondition":  "GFD",            // Default
+		"UserID":         order.InvestorID, // CTP Core expects UserID/InvestorID, use InvestorID for both if needed
+		"InvestorID":     order.InvestorID,
+		// Add StrategyID to payload if needed by CTP? No, CTP doesn't know StrategyID,
+		// but we map it back via OrderRef in the database.
 	}
 
 	cmd := Command{
@@ -138,6 +133,30 @@ func (c *Client) CancelOrder(ctx context.Context, order *model.Order) error {
 			"ActionFlag":   "0", // '0' is Delete (撤单)
 		},
 		RequestID: "cancel-" + order.OrderRef,
+	}
+	return c.SendCommand(ctx, cmd)
+}
+
+// QueryMarginRate requests instrument margin rate.
+func (c *Client) QueryMarginRate(ctx context.Context, instrumentID string) error {
+	cmd := Command{
+		Type: "QUERY_MARGIN_RATE",
+		Payload: map[string]interface{}{
+			"InstrumentID": instrumentID,
+		},
+		RequestID: fmt.Sprintf("query-margin-%s-%s", instrumentID, time.Now().Format("20060102150405")),
+	}
+	return c.SendCommand(ctx, cmd)
+}
+
+// QueryCommissionRate requests instrument commission rate.
+func (c *Client) QueryCommissionRate(ctx context.Context, instrumentID string) error {
+	cmd := Command{
+		Type: "QUERY_COMMISSION_RATE",
+		Payload: map[string]interface{}{
+			"InstrumentID": instrumentID,
+		},
+		RequestID: fmt.Sprintf("query-comm-%s-%s", instrumentID, time.Now().Format("20060102150405")),
 	}
 	return c.SendCommand(ctx, cmd)
 }

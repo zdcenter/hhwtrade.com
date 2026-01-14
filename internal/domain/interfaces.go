@@ -40,6 +40,12 @@ type MarketService interface {
 	SyncInstruments(ctx context.Context) error
 	// 重新订阅所有活跃合约 (用于 CTP 重启恢复)
 	ResubscribeAll(ctx context.Context) error
+	// 查询保证金率
+	QueryMarginRate(ctx context.Context, instrumentID string) error
+	// 查询手续费率
+	QueryCommissionRate(ctx context.Context, instrumentID string) error
+	// 请求更新所有费率 (带流控处理)
+	RequestRateUpdate(ctx context.Context, instrumentID string) error
 }
 
 // ===========================
@@ -53,13 +59,15 @@ type TradingService interface {
 	// 撤单
 	CancelOrder(ctx context.Context, orderID uint) error
 	// 查询持仓 (触发 CTP 查询)
-	QueryPositions(ctx context.Context, userID, instrumentID string) error
+	QueryPositions(ctx context.Context, investorID, instrumentID string) error
 	// 查询账户 (触发 CTP 查询)
-	QueryAccount(ctx context.Context, userID string) error
+	QueryAccount(ctx context.Context, investorID string) error
 	// 获取订单列表
-	GetOrders(ctx context.Context, userID string, page, pageSize int) ([]model.Order, int64, error)
+	GetOrders(ctx context.Context, investorID string, page, pageSize int) ([]model.Order, int64, error)
+	// 获取成交列表
+	GetTrades(ctx context.Context, investorID string, page, pageSize int) ([]model.Trade, int64, error)
 	// 获取持仓列表
-	GetPositions(ctx context.Context, userID string) ([]model.Position, error)
+	GetPositions(ctx context.Context, investorID string) ([]model.Position, error)
 }
 
 // ===========================
@@ -120,6 +128,10 @@ type CTPClienter interface {
 	QueryAccount(ctx context.Context, userID string) error
 	// 同步合约
 	SyncInstruments(ctx context.Context) error
+	// 查询保证金率
+	QueryMarginRate(ctx context.Context, instrumentID string) error
+	// 查询手续费率
+	QueryCommissionRate(ctx context.Context, instrumentID string) error
 }
 
 // ===========================

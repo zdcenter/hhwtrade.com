@@ -24,6 +24,7 @@ type StrategyRunner interface {
 // ConditionOrderRunner 是条件单的具体执行逻辑
 type ConditionOrderRunner struct {
 	strategyID   uint                       // 策略 ID (数据库主键)
+	investorID   string                     // 投资者账号
 	instrumentID string                     // 合约代码
 	cfg          model.ConditionOrderConfig // 解析后的配置参数
 	triggered    bool                       // 运行时状态：是否已经触发过
@@ -39,6 +40,7 @@ func NewConditionOrderRunner(strategy model.Strategy) (*ConditionOrderRunner, er
 
 	return &ConditionOrderRunner{
 		strategyID:   strategy.ID,
+		investorID:   strategy.UserID, // 目前策略中的 UserID 即为 InvestorID
 		instrumentID: strategy.InstrumentID,
 		cfg:          cfg,
 		triggered:    false, // 初始状态未触发
@@ -100,8 +102,9 @@ func (r *ConditionOrderRunner) OnTick(price float64) *model.Order {
 		}
 
 		orderRef := fmt.Sprintf("st%04d%d", r.strategyID, time.Now().Unix()%100000)
-		
+
 		return &model.Order{
+			InvestorID:          r.investorID,
 			InstrumentID:        r.instrumentID,
 			OrderRef:            orderRef,
 			Direction:           direction,
@@ -109,9 +112,6 @@ func (r *ConditionOrderRunner) OnTick(price float64) *model.Order {
 			LimitPrice:          price, // 使用触发时的市场/限价
 			VolumeTotalOriginal: r.cfg.Volume,
 			StrategyID:          &r.strategyID,
-			// UserID/InvestorID will be filled by CTP Client or default context
-			// We can leave them empty here if CTP Client handles them, or pass them if Strategy context has them.
-			// Currently Strategy doesn't know UserID. We should probably add UserID to Strategy model/runner.
 		}
 	}
 
@@ -121,7 +121,3 @@ func (r *ConditionOrderRunner) OnTick(price float64) *model.Order {
 func timeNowUnix() int64 {
 	return time.Now().Unix()
 }
-
-
-
-

@@ -223,3 +223,25 @@ func (h *FutureHandler) CleanupExpired(c *fiber.Ctx) error {
 		"Message": strconv.FormatInt(result.RowsAffected, 10) + " expired instruments removed",
 	})
 }
+
+// UpdateFutureRates 更新合约保证金和手续费率
+// @Summary 更新合约保证金和手续费率
+// @Description 触发从 CTP 查询指定合约的最新保证金和手续费率，并更新到数据库
+// @Tags Market
+// @Accept json
+// @Produce json
+// @Param id path string true "合约ID (InstrumentID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /futures/{id}/rates [post]
+func (h *FutureHandler) UpdateFutureRates(c *fiber.Ctx) error {
+	instrumentID := c.Params("id")
+
+	// 触发费率更新 (内部包含 1.2s 延迟以避开 CTP 流控)
+	if err := h.marketSvc.RequestRateUpdate(c.Context(), instrumentID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"Error": "Failed to trigger rate update: " + err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"Status": true, "Message": "Rate update triggered for " + instrumentID})
+}

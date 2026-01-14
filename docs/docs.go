@@ -359,6 +359,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/futures/{id}/rates": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "触发从 CTP 查询指定合约的最新保证金和手续费率，并更新到数据库",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Market"
+                ],
+                "summary": "更新合约保证金和手续费率",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "合约ID (InstrumentID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/subscriptions": {
             "get": {
                 "security": [
@@ -914,6 +959,22 @@ const docTemplate = `{
         "model.Future": {
             "type": "object",
             "properties": {
+                "CloseRatioByMoney": {
+                    "description": "平仓手续费率(按金额)",
+                    "type": "number"
+                },
+                "CloseRatioByVolume": {
+                    "description": "平仓手续费率(按手数)",
+                    "type": "number"
+                },
+                "CloseTodayRatioByMoney": {
+                    "description": "平今手续费率(按金额)",
+                    "type": "number"
+                },
+                "CloseTodayRatioByVolume": {
+                    "description": "平今手续费率(按手数)",
+                    "type": "number"
+                },
                 "ExchangeID": {
                     "type": "string"
                 },
@@ -932,7 +993,16 @@ const docTemplate = `{
                 "IsTrading": {
                     "type": "integer"
                 },
+                "LongMarginRatioByMoney": {
+                    "description": "详细保证金率",
+                    "type": "number"
+                },
+                "LongMarginRatioByVolume": {
+                    "description": "多头保证金率(按手数)",
+                    "type": "number"
+                },
                 "MarginRate": {
+                    "description": "此时该字段可作为参考或废弃",
                     "type": "number"
                 },
                 "MaxLimitOrderVolume": {
@@ -947,11 +1017,27 @@ const docTemplate = `{
                 "MinMarketOrderVolume": {
                     "type": "integer"
                 },
+                "OpenRatioByMoney": {
+                    "description": "详细手续费率",
+                    "type": "number"
+                },
+                "OpenRatioByVolume": {
+                    "description": "开仓手续费率(按手数)",
+                    "type": "number"
+                },
                 "PriceTick": {
                     "type": "number"
                 },
                 "ProductID": {
                     "type": "string"
+                },
+                "ShortMarginRatioByMoney": {
+                    "description": "空头保证金率(按金额)",
+                    "type": "number"
+                },
+                "ShortMarginRatioByVolume": {
+                    "description": "空头保证金率(按手数)",
+                    "type": "number"
                 },
                 "VolumeMultiple": {
                     "type": "integer"

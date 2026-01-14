@@ -68,6 +68,8 @@ func (r *Router) RegisterRoutes() {
 	subHandler := NewSubscriptionHandler(r.subscriptionSvc)
 	strategyHandler := NewStrategyHandler(r.strategySvc)
 	futureHandler := NewFutureHandler(r.db, r.marketSvc)
+	orderHandler := NewOrderHandler(r.tradingSvc)
+	posHandler := NewPositionHandler(r.tradingSvc)
 	tradeHandler := NewTradeHandler(r.tradingSvc)
 
 	// 3. 注册 WebSocket 路由 (不需要 JWT 中间件)
@@ -82,7 +84,7 @@ func (r *Router) RegisterRoutes() {
 	})
 
 	// Swagger Documentation
-	r.app.Get("/swagger/*", swagger.HandlerDefault) 
+	r.app.Get("/swagger/*", swagger.HandlerDefault)
 
 	// Auth Public Routes
 	r.app.Post("/auth/register", authHandler.Register)
@@ -91,18 +93,18 @@ func (r *Router) RegisterRoutes() {
 
 	// 5. 注册受保护的 API 路由 (Protected /api)
 	r.router = r.app.Group("/api")
-	jwtSecret := r.cfg.Server.JwtSecret	
+	jwtSecret := r.cfg.Server.JwtSecret
 	r.router.Use(middleware.CasbinMiddleware(enforcer, jwtSecret))
 
 	// 分组注册子路由
-	r.registerUserRoutes(subHandler, strategyHandler, tradeHandler)
+	r.registerUserRoutes(subHandler, strategyHandler, orderHandler, posHandler, tradeHandler)
 	r.registerMarketRoutes(futureHandler)
-	r.registerTradeRoutes(tradeHandler)
+	r.registerTradeRoutes(orderHandler)
 	r.registerStrategyRoutes(strategyHandler)
 	r.registerAuthRoutes(authHandler)
 }
 
-func (r *Router) registerUserRoutes(sub *SubscriptionHandler, strat *StrategyHandler, trade *TradeHandler) {
+func (r *Router) registerUserRoutes(sub *SubscriptionHandler, strat *StrategyHandler, order *OrderHandler, pos *PositionHandler, trade *TradeHandler) {
 	// Global Subscriptions
 	r.router.Get("/subscriptions", sub.GetSubscriptions)
 	r.router.Post("/subscriptions", sub.AddSubscription)
@@ -114,11 +116,15 @@ func (r *Router) registerUserRoutes(sub *SubscriptionHandler, strat *StrategyHan
 	// Strategies
 	users.Get("/strategies", strat.GetStrategies)
 
-	// Positions & Orders
-	users.Get("/positions", trade.GetPositions)
-	users.Get("/orders", trade.GetOrders)
-	users.Post("/sync-positions", trade.SyncPositions)
-	users.Post("/sync-account", trade.SyncAccount)
+	// User Specific Account Sync
+	users.Post("/sync-account", pos.SyncAccount)
+
+	// Investor (CTP Account) Specific Routes
+	investors := r.router.Group("/investors/:investorID")
+	investors.Get("/positions", pos.GetPositions)
+	investors.Get("/orders", order.GetOrders)
+	investors.Get("/trades", trade.GetTrades)
+	investors.Post("/sync", pos.SyncPositions)
 }
 
 func (r *Router) registerMarketRoutes(h *FutureHandler) {
@@ -130,6 +136,7 @@ func (r *Router) registerMarketRoutes(h *FutureHandler) {
 	futures.Get("/:id", h.GetFuture)
 	futures.Put("/:id", h.UpdateFuture)
 	futures.Delete("/:id", h.DeleteFuture)
+	futures.Post("/:id/rates", h.UpdateFutureRates)
 }
 
 func (r *Router) registerStrategyRoutes(h *StrategyHandler) {
@@ -142,7 +149,7 @@ func (r *Router) registerStrategyRoutes(h *StrategyHandler) {
 	strategies.Post("/:id/start", h.StartStrategy)
 }
 
-func (r *Router) registerTradeRoutes(h *TradeHandler) {
+func (r *Router) registerTradeRoutes(h *OrderHandler) {
 	trade := r.router.Group("/trade")
 	trade.Post("/order", h.InsertOrder)
 	trade.Post("/order/:id/cancel", h.CancelOrder)

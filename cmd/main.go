@@ -65,7 +65,7 @@ func main() {
 	// ============================================
 
 	// 4.1 行情服务
-	marketService := service.NewMarketService(ctpClient, wsHub)
+	marketService := service.NewMarketService(ctpClient, wsHub, pg.DB)
 
 	// 4.2 交易服务
 	tradingService := service.NewTradingService(pg.DB, ctpClient, wsHub)
